@@ -1,15 +1,20 @@
 import UIKit
 import Flutter
 import ARKit
+import CoreLocation
 
-@main
+@UIApplicationMain
 @objc class AppDelegate: FlutterAppDelegate {
     
+    var locationManager: LocationManager?
+
     override func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
         
+        locationManager = LocationManager()
+
         let controller: FlutterViewController = window?.rootViewController as! FlutterViewController
         let channel = FlutterMethodChannel(name: "com.demo.channel/message",
                                            binaryMessenger: controller.binaryMessenger)
@@ -26,24 +31,20 @@ import ARKit
     }
 
     private func startLiDARScan(result: @escaping FlutterResult) {
-        if #available(iOS 13.4, *) {
-            guard ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) else {
-                result("Scene reconstruction not supported on this device.")
-                return
+        DispatchQueue.main.async {
+            if #available(iOS 13.4, *) {
+                let scanVC = ScanViewController()
+                scanVC.modalPresentationStyle = .fullScreen
+                self.window?.rootViewController?.present(scanVC, animated: true) {
+                    result("LiDAR Scan View started.")
+                }
+            } else {
+                result(FlutterError(
+                    code: "UNSUPPORTED",
+                    message: "LiDAR scanning requires iOS 13.4 or later",
+                    details: nil
+                ))
             }
-
-            let config = ARWorldTrackingConfiguration()
-            config.planeDetection = [.horizontal, .vertical]
-            config.environmentTexturing = .automatic
-            config.sceneReconstruction = .meshWithClassification
-
-            let arSession = ARSession()
-            arSession.run(config)
-
-            print("Started LiDAR scan session.")
-            result("LiDAR scan started.")
-        } else {
-            result("Scene reconstruction requires iOS 13.4 or newer.")
         }
     }
 }
