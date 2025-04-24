@@ -18,6 +18,10 @@
 		D88E3E71CC9D8DE179DA0F13 /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FBF20FE28FAA98982405404C /* Pods_Runner.framework */; };
 		FC1FAE6F2DB86EF6005668BD /* scan_view_controller.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC1FAE6E2DB86EF6005668BD /* scan_view_controller.swift */; };
 		FC1FAE702DB86EF6005668BD /* location_manager.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC1FAE6D2DB86EF6005668BD /* location_manager.swift */; };
+		FC8F29332DB9C5CD00607A05 /* ModelViewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC8F29322DB9C5CD00607A05 /* ModelViewer.swift */; };
+		FC8F29362DB9CBE600607A05 /* ARScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC8F29342DB9CBE600607A05 /* ARScanner.swift */; };
+		FC8F29372DB9CBE600607A05 /* ControlPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC8F29352DB9CBE600607A05 /* ControlPanel.swift */; };
+		FC8F29392DB9CEA000607A05 /* CapturedMesh.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC8F29382DB9CEA000607A05 /* CapturedMesh.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -68,6 +72,10 @@
 		FBF20FE28FAA98982405404C /* Pods_Runner.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Runner.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		FC1FAE6D2DB86EF6005668BD /* location_manager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = location_manager.swift; sourceTree = "<group>"; };
 		FC1FAE6E2DB86EF6005668BD /* scan_view_controller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = scan_view_controller.swift; sourceTree = "<group>"; };
+		FC8F29322DB9C5CD00607A05 /* ModelViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelViewer.swift; sourceTree = "<group>"; };
+		FC8F29342DB9CBE600607A05 /* ARScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ARScanner.swift; sourceTree = "<group>"; };
+		FC8F29352DB9CBE600607A05 /* ControlPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlPanel.swift; sourceTree = "<group>"; };
+		FC8F29382DB9CEA000607A05 /* CapturedMesh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapturedMesh.swift; sourceTree = "<group>"; };
 		FFAA372500296A5E1EAD4F9F /* Pods-Runner.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.debug.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -143,6 +151,10 @@
 		97C146F01CF9000F007C117D /* Runner */ = {
 			isa = PBXGroup;
 			children = (
+				FC8F29382DB9CEA000607A05 /* CapturedMesh.swift */,
+				FC8F29342DB9CBE600607A05 /* ARScanner.swift */,
+				FC8F29352DB9CBE600607A05 /* ControlPanel.swift */,
+				FC8F29322DB9C5CD00607A05 /* ModelViewer.swift */,
 				FC1FAE6D2DB86EF6005668BD /* location_manager.swift */,
 				FC1FAE6E2DB86EF6005668BD /* scan_view_controller.swift */,
 				97C146FA1CF9000F007C117D /* Main.storyboard */,
@@ -365,7 +377,11 @@
 			buildActionMask = 2147483647;
 			files = (
 				FC1FAE6F2DB86EF6005668BD /* scan_view_controller.swift in Sources */,
+				FC8F29362DB9CBE600607A05 /* ARScanner.swift in Sources */,
+				FC8F29392DB9CEA000607A05 /* CapturedMesh.swift in Sources */,
+				FC8F29372DB9CBE600607A05 /* ControlPanel.swift in Sources */,
 				FC1FAE702DB86EF6005668BD /* location_manager.swift in Sources */,
+				FC8F29332DB9C5CD00607A05 /* ModelViewer.swift in Sources */,
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 			);
