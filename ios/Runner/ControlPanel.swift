@@ -1,7 +1,10 @@
 import UIKit
 
 protocol ControlPanelDelegate: AnyObject {
-    func controlPanel(_ panel: ControlPanel, didTapButton button: UIButton)
+    func controlPanelDidTapStart(_ panel: ControlPanel)
+    func controlPanelDidTapStop(_ panel: ControlPanel)
+    func controlPanelDidTapRestart(_ panel: ControlPanel)
+    func controlPanelDidTapPreview(_ panel: ControlPanel)
     func controlPanel(_ panel: ControlPanel, didRequestExportAs format: ExportFormat)
 }
 
@@ -14,10 +17,10 @@ class ControlPanel: UIStackView {
     let statusLabel = UILabel()
     let actionButtons = UIStackView()
     
+    let startButton = UIButton()
     let stopButton = UIButton()
     let restartButton = UIButton()
     let previewButton = UIButton()
-    let saveButton = UIButton()
     let exportButton = UIButton()
     
     weak var delegate: ControlPanelDelegate?
@@ -39,99 +42,94 @@ class ControlPanel: UIStackView {
         spacing = 12
         distribution = .fill
         
-        // Configure status label
+        // Status Label
         statusLabel.textColor = .white
         statusLabel.font = .systemFont(ofSize: 16, weight: .medium)
         statusLabel.textAlignment = .center
         statusLabel.backgroundColor = UIColor.black.withAlphaComponent(0.7)
         statusLabel.layer.cornerRadius = 8
         statusLabel.clipsToBounds = true
-        statusLabel.text = "Preparing scan..."
+        statusLabel.text = "Ready to scan"
         addArrangedSubview(statusLabel)
         statusLabel.heightAnchor.constraint(equalToConstant: 44).isActive = true
         
-        // Configure action buttons
+        // Action Buttons
         actionButtons.axis = .horizontal
         actionButtons.spacing = 12
         actionButtons.distribution = .fillEqually
         addArrangedSubview(actionButtons)
-        actionButtons.heightAnchor.constraint(greaterThanOrEqualToConstant: 50).isActive = true
+        actionButtons.heightAnchor.constraint(equalToConstant: 50).isActive = true
         
         // Configure buttons
-        stopButton.setTitle("Stop", for: .normal)
-        stopButton.backgroundColor = .systemRed.withAlphaComponent(0.8)
+        configureButton(startButton, title: "Start", color: .systemGreen)
+        configureButton(stopButton, title: "Stop", color: .systemRed)
+        configureButton(restartButton, title: "Restart", color: .systemOrange)
+        configureButton(previewButton, title: "Preview", color: .systemPurple)
+        configureButton(exportButton, title: "Export", color: .systemBlue)
         
-        restartButton.setTitle("Restart", for: .normal)
-        restartButton.backgroundColor = .systemOrange.withAlphaComponent(0.8)
-        
-        previewButton.setTitle("Preview", for: .normal)
-        previewButton.backgroundColor = .systemPurple.withAlphaComponent(0.8)
-        
-        saveButton.setTitle("Save", for: .normal)
-        saveButton.backgroundColor = .systemBlue.withAlphaComponent(0.8)
-        
-        exportButton.setTitle("Export", for: .normal)
-        exportButton.backgroundColor = .systemGreen.withAlphaComponent(0.8)
-        
-        // Add buttons
-        [stopButton, restartButton, previewButton, saveButton, exportButton].forEach {
-            configureButton($0)
-            actionButtons.addArrangedSubview($0)
-            $0.isHidden = true
-        }
-        
-        stopButton.isHidden = false
+        // Initial state
+        updateUIForScanningState(isScanning: false, hasMeshes: false)
     }
     
-    private func configureButton(_ button: UIButton) {
+    private func configureButton(_ button: UIButton, title: String, color: UIColor) {
+        button.setTitle(title, for: .normal)
+        button.backgroundColor = color.withAlphaComponent(0.8)
         button.titleLabel?.font = .systemFont(ofSize: 18, weight: .bold)
         button.setTitleColor(.white, for: .normal)
         button.layer.cornerRadius = 10
         button.clipsToBounds = true
+        actionButtons.addArrangedSubview(button)
     }
     
     private func setupButtonActions() {
-        stopButton.addTarget(self, action: #selector(buttonTapped(_:)), for: .touchUpInside)
-        restartButton.addTarget(self, action: #selector(buttonTapped(_:)), for: .touchUpInside)
-        previewButton.addTarget(self, action: #selector(buttonTapped(_:)), for: .touchUpInside)
-        saveButton.addTarget(self, action: #selector(buttonTapped(_:)), for: .touchUpInside)
-        exportButton.addTarget(self, action: #selector(exportButtonTapped(_:)), for: .touchUpInside)
+        startButton.addTarget(self, action: #selector(startTapped), for: .touchUpInside)
+        stopButton.addTarget(self, action: #selector(stopTapped), for: .touchUpInside)
+        restartButton.addTarget(self, action: #selector(restartTapped), for: .touchUpInside)
+        previewButton.addTarget(self, action: #selector(previewTapped), for: .touchUpInside)
+        exportButton.addTarget(self, action: #selector(exportTapped), for: .touchUpInside)
     }
     
-    @objc private func buttonTapped(_ sender: UIButton) {
-        delegate?.controlPanel(self, didTapButton: sender)
-    }
+    @objc private func startTapped() { delegate?.controlPanelDidTapStart(self) }
+    @objc private func stopTapped() { delegate?.controlPanelDidTapStop(self) }
+    @objc private func restartTapped() { delegate?.controlPanelDidTapRestart(self) }
+    @objc private func previewTapped() { delegate?.controlPanelDidTapPreview(self) }
     
-    @objc private func exportButtonTapped(_ sender: UIButton) {
-        let alert = UIAlertController(title: "Export Options", message: "Choose export format", preferredStyle: .actionSheet)
+    @objc private func exportTapped() {
+        let alert = UIAlertController(title: "Export Options",
+                                    message: "Choose export format",
+                                    preferredStyle: .actionSheet)
         
-        alert.addAction(UIAlertAction(title: "JSON", style: .default, handler: { _ in
+        alert.addAction(UIAlertAction(title: "JSON", style: .default) { _ in
             self.delegate?.controlPanel(self, didRequestExportAs: .json)
-        }))
+        })
         
-        alert.addAction(UIAlertAction(title: "PLY", style: .default, handler: { _ in
+        alert.addAction(UIAlertAction(title: "PLY", style: .default) { _ in
             self.delegate?.controlPanel(self, didRequestExportAs: .ply)
-        }))
+        })
         
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         
-        if let vc = self.parentViewController {
-            alert.popoverPresentationController?.sourceView = sender
-            alert.popoverPresentationController?.sourceRect = sender.bounds
+        if let vc = parentViewController {
+            alert.popoverPresentationController?.sourceView = exportButton
+            alert.popoverPresentationController?.sourceRect = exportButton.bounds
             vc.present(alert, animated: true)
         }
     }
     
     func updateStatus(_ text: String) {
-        statusLabel.text = text
+        DispatchQueue.main.async {
+            self.statusLabel.text = text
+        }
     }
     
     func updateUIForScanningState(isScanning: Bool, hasMeshes: Bool) {
-        stopButton.isHidden = !isScanning
-        restartButton.isHidden = isScanning
-        previewButton.isHidden = isScanning || !hasMeshes
-        saveButton.isHidden = isScanning
-        exportButton.isHidden = isScanning || !hasMeshes
+        DispatchQueue.main.async {
+            self.startButton.isHidden = isScanning || hasMeshes
+            self.stopButton.isHidden = !isScanning
+            self.restartButton.isHidden = !hasMeshes
+            self.previewButton.isHidden = !hasMeshes
+            self.exportButton.isHidden = !hasMeshes
+        }
     }
 }
 

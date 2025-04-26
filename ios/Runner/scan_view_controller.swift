@@ -2,12 +2,14 @@ import UIKit
 import ARKit
 import SceneKit
 import AVFoundation
+import os.log
 
 @available(iOS 13.4, *)
 class ScanViewController: UIViewController {
     
     // MARK: - Components
     private let arScanner = ARScanner()
+    let captureManager = ScanCaptureManager() // Changed from private to internal
     private let controlPanel = ControlPanel()
     private let fileManager = FileManager.default
     
@@ -22,6 +24,7 @@ class ScanViewController: UIViewController {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         arScanner.stopScan()
+        cleanupTemporaryFiles()
     }
     
     // MARK: - Setup
@@ -51,19 +54,21 @@ class ScanViewController: UIViewController {
     private func checkCameraPermission() {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
-            arScanner.startScan()
+            controlPanel.updateUIForScanningState(isScanning: false, hasMeshes: false)
         case .notDetermined:
             AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
                 DispatchQueue.main.async {
                     if granted {
-                        self?.arScanner.startScan()
+                        self?.controlPanel.updateUIForScanningState(isScanning: false, hasMeshes: false)
                     } else {
-                        self?.showAlert(title: "Permission Denied", message: "Camera access is required for AR scanning.")
+                        self?.showAlert(title: "Permission Denied",
+                                      message: "Camera access is required for AR scanning.")
                     }
                 }
             }
         default:
-            showAlert(title: "Permission Denied", message: "Camera access is required for AR scanning.")
+            showAlert(title: "Permission Denied",
+                     message: "Camera access is required for AR scanning.")
         }
     }
     
@@ -82,7 +87,9 @@ class ScanViewController: UIViewController {
     
     private func generatePLYContent() throws -> String {
         let meshes = arScanner.getCapturedMeshes()
-        guard !meshes.isEmpty else { throw NSError(domain: "No meshes", code: 0, userInfo: nil) }
+        guard !meshes.isEmpty else {
+            throw NSError(domain: "No meshes", code: 0, userInfo: nil)
+        }
         
         var plyHeader = """
         ply
@@ -94,19 +101,20 @@ class ScanViewController: UIViewController {
         property float z
         element face \(meshes.reduce(0) { $0 + $1.indices.count / 3 })
         property list uchar uint vertex_indices
-        end_header
-        \n
+        end_header\n\n
         """
         
         var vertexOffset = 0
         var plyBody = ""
         
+        // Write vertices
         for mesh in meshes {
             for vertex in mesh.vertices {
                 plyBody += "\(vertex.x) \(vertex.y) \(vertex.z)\n"
             }
         }
         
+        // Write faces
         for mesh in meshes {
             for i in stride(from: 0, to: mesh.indices.count, by: 3) {
                 let i0 = mesh.indices[i] + UInt32(vertexOffset)
@@ -123,23 +131,47 @@ class ScanViewController: UIViewController {
     private func savePLYFile(content: String) throws -> URL {
         let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let fileURL = documentsURL.appendingPathComponent("scan_\(Date().timeIntervalSince1970).ply")
-        
         try content.write(to: fileURL, atomically: true, encoding: .utf8)
         return fileURL
     }
     
     private func shareFile(_ fileURL: URL) {
-        let activityVC = UIActivityViewController(activityItems: [fileURL], applicationActivities: nil)
+        let activityVC = UIActivityViewController(activityItems: [fileURL],
+                                                applicationActivities: nil)
         activityVC.popoverPresentationController?.sourceView = controlPanel.exportButton
         activityVC.popoverPresentationController?.sourceRect = controlPanel.exportButton.bounds
         present(activityVC, animated: true)
     }
     
+    // MARK: - File Cleanup
+    private func cleanupTemporaryFiles() {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            self?.captureManager.cleanupCaptureDirectory()
+            os_log("Cleaned up temporary capture files", log: OSLog.default, type: .info)
+        }
+    }
+    
+    private func cleanupAfterExport() {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            self?.captureManager.cleanupCaptureDirectory()
+            os_log("Cleaned up files after successful export", log: OSLog.default, type: .info)
+        }
+    }
+    
     // MARK: - UI Helpers
     private func showAlert(title: String, message: String) {
-        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        let alert = UIAlertController(title: title,
+                                    message: message,
+                                    preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default))
         present(alert, animated: true)
+    }
+    
+    private func showPreview() {
+        let previewVC = ModelViewController()
+        previewVC.capturedMeshes = arScanner.getCapturedMeshes()
+        previewVC.modalPresentationStyle = .fullScreen
+        present(previewVC, animated: true)
     }
 }
 
@@ -147,16 +179,30 @@ class ScanViewController: UIViewController {
 @available(iOS 13.4, *)
 extension ScanViewController: ARScannerDelegate {
     func arScanner(_ scanner: ARScanner, didUpdateStatus status: String) {
-        controlPanel.updateStatus(status)
+        DispatchQueue.main.async {
+            self.controlPanel.updateStatus(status)
+        }
     }
     
     func arScanner(_ scanner: ARScanner, didUpdateMeshesCount count: Int) {
-        controlPanel.updateUIForScanningState(isScanning: scanner.isScanning, hasMeshes: count > 0)
+        DispatchQueue.main.async {
+            self.controlPanel.updateUIForScanningState(isScanning: scanner.isScanning,
+                                                      hasMeshes: count > 0)
+        }
     }
     
     func arScannerDidStopScanning(_ scanner: ARScanner) {
-        controlPanel.updateUIForScanningState(isScanning: false,
-                                           hasMeshes: !scanner.getCapturedMeshes().isEmpty)
+        DispatchQueue.main.async {
+            self.controlPanel.updateUIForScanningState(isScanning: false,
+                                                     hasMeshes: !scanner.getCapturedMeshes().isEmpty)
+        }
+        cleanupTemporaryFiles()
+    }
+    
+    func arScannerDidStartScanning(_ scanner: ARScanner) {
+        DispatchQueue.main.async {
+            self.controlPanel.updateUIForScanningState(isScanning: true, hasMeshes: false)
+        }
     }
     
     func arScanner(_ scanner: ARScanner, showAlertWithTitle title: String, message: String) {
@@ -167,19 +213,21 @@ extension ScanViewController: ARScannerDelegate {
 // MARK: - ControlPanelDelegate
 @available(iOS 13.4, *)
 extension ScanViewController: ControlPanelDelegate {
-    func controlPanel(_ panel: ControlPanel, didTapButton button: UIButton) {
-        switch button {
-        case panel.stopButton:
-            arScanner.stopScan()
-        case panel.restartButton:
-            arScanner.restartScan()
-        case panel.previewButton:
-            showPreview()
-        case panel.saveButton:
-            saveScan()
-        default:
-            break
-        }
+    func controlPanelDidTapStart(_ panel: ControlPanel) {
+        arScanner.startScan()
+    }
+    
+    func controlPanelDidTapStop(_ panel: ControlPanel) {
+        arScanner.stopScan()
+    }
+    
+    func controlPanelDidTapRestart(_ panel: ControlPanel) {
+        arScanner.restartScan()
+        cleanupTemporaryFiles()
+    }
+    
+    func controlPanelDidTapPreview(_ panel: ControlPanel) {
+        showPreview()
     }
     
     func controlPanel(_ panel: ControlPanel, didRequestExportAs format: ExportFormat) {
@@ -191,44 +239,33 @@ extension ScanViewController: ControlPanelDelegate {
         }
     }
     
-    private func showPreview() {
-        let previewVC = ModelViewController()
-        previewVC.capturedMeshes = arScanner.getCapturedMeshes()
-        previewVC.modalPresentationStyle = .fullScreen
-        present(previewVC, animated: true)
-    }
-    
-    private func saveScan() {
-        do {
-            let fileURL = try saveCapturedMeshes()
-            showAlert(title: "Scan Saved", message: "Scan saved successfully!")
-            print("Scan saved to: \(fileURL.path)")
-        } catch {
-            showAlert(title: "Save Error", message: "Failed to save scan: \(error.localizedDescription)")
-        }
-    }
-    
     private func exportAsJSON() {
         do {
             let fileURL = try saveCapturedMeshes()
             shareFile(fileURL)
+            cleanupAfterExport()
         } catch {
-            showAlert(title: "Export Error", message: error.localizedDescription)
+            showAlert(title: "Export Error",
+                     message: error.localizedDescription)
         }
     }
     
     private func exportAsPLY() {
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            
             do {
                 let plyContent = try self.generatePLYContent()
                 let fileURL = try self.savePLYFile(content: plyContent)
                 
                 DispatchQueue.main.async {
                     self.shareFile(fileURL)
+                    self.cleanupAfterExport()
                 }
             } catch {
                 DispatchQueue.main.async {
-                    self.showAlert(title: "Export Error", message: error.localizedDescription)
+                    self.showAlert(title: "Export Error",
+                                 message: error.localizedDescription)
                 }
             }
         }

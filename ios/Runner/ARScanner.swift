@@ -16,6 +16,9 @@ class ARScanner: NSObject {
     private var allCapturedMeshes = [UUID: CapturedMesh]()
     private var meshNodes = [UUID: SCNNode]()
     private let meshProcessingQueue = DispatchQueue(label: "mesh.processing.queue", qos: .userInitiated)
+
+    // ✅ NEW: Capture images and camera transforms
+    private let captureManager = ScanCaptureManager()
     
     var view: ARSCNView { return arView }
     var isScanning: Bool = false
@@ -270,6 +273,7 @@ extension ARGeometryElement {
     }
 }
 
+// MARK: - ARSessionDelegate, ARSCNViewDelegate
 @available(iOS 13.4, *)
 extension ARScanner: ARSessionDelegate, ARSCNViewDelegate {
     func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
@@ -281,6 +285,9 @@ extension ARScanner: ARSessionDelegate, ARSCNViewDelegate {
     }
     
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        // ✅ NEW: Capture image + pose every N frames
+        captureManager.tryCapture(frame: frame)
+        
         DispatchQueue.main.async {
             switch frame.worldMappingStatus {
             case .notAvailable:
@@ -294,7 +301,7 @@ extension ARScanner: ARSessionDelegate, ARSCNViewDelegate {
             @unknown default:
                 self.delegate?.arScanner(self, didUpdateStatus: "Unknown mapping status")
             }
-            
+
             switch frame.camera.trackingState {
             case .normal:
                 break
@@ -316,3 +323,4 @@ extension ARScanner: ARSessionDelegate, ARSCNViewDelegate {
         }
     }
 }
+
