@@ -11,6 +11,7 @@ protocol ControlPanelDelegate: AnyObject {
 enum ExportFormat {
     case json
     case ply
+    case zip  // ✅ Added ZIP export option
 }
 
 class ControlPanel: UIStackView {
@@ -105,6 +106,10 @@ class ControlPanel: UIStackView {
         
         alert.addAction(UIAlertAction(title: "PLY", style: .default) { _ in
             self.delegate?.controlPanel(self, didRequestExportAs: .ply)
+        })
+        
+        alert.addAction(UIAlertAction(title: "ZIP", style: .default) { _ in
+            self.delegate?.controlPanel(self, didRequestExportAs: .zip)  // ✅ ZIP option
         })
         
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
