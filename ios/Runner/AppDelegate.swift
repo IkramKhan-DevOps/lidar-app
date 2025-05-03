@@ -3,7 +3,7 @@ import Flutter
 import ARKit
 import CoreLocation
 
-@UIApplicationMain
+@main
 @objc class AppDelegate: FlutterAppDelegate {
     
     var locationManager: LocationManager?

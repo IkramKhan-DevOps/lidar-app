@@ -17,7 +17,7 @@ class ARScanner: NSObject {
     private var meshNodes = [UUID: SCNNode]()
     private let meshProcessingQueue = DispatchQueue(label: "mesh.processing.queue", qos: .userInitiated)
 
-    // ✅ NEW: Capture images and camera transforms
+    // Capture images and camera transforms
     private let captureManager = ScanCaptureManager()
     
     var view: ARSCNView { return arView }
@@ -99,10 +99,12 @@ class ARScanner: NSObject {
             
             do {
                 let vertices = try self.extractVertices(from: geometry.vertices)
+                let normals = try self.extractNormals(from: geometry.normals) // Fixed: Removed force unwrap
                 let indices = try self.extractIndices(from: geometry.faces)
                 
                 let mesh = CapturedMesh(
                     vertices: vertices,
+                    normals: normals,
                     indices: indices,
                     transform: transform
                 )
@@ -116,6 +118,18 @@ class ARScanner: NSObject {
                 print("Mesh processing error: \(error)")
             }
         }
+    }
+
+    private func extractNormals(from source: ARGeometrySource) throws -> [SIMD3<Float>] {
+        var normals = [SIMD3<Float>]()
+        normals.reserveCapacity(source.count)
+        
+        for i in 0..<source.count {
+            let normal = try source.safeVertex(at: UInt32(i))
+            normals.append(normal)
+        }
+        
+        return normals
     }
     
     private func createPolycamStyleNode(from meshAnchor: ARMeshAnchor) throws -> SCNNode {
@@ -216,11 +230,12 @@ class ARScanner: NSObject {
 
 // MARK: - Safe Buffer Access Extensions
 @available(iOS 13.4, *)
+struct GeometrySourceError: Error {
+    let message: String
+}
+
+@available(iOS 13.4, *)
 extension ARGeometrySource {
-    struct GeometrySourceError: Error {
-        let message: String
-    }
-    
     func safeVertex(at index: UInt32) throws -> SIMD3<Float> {
         guard index < count else {
             throw GeometrySourceError(message: "Index \(index) out of bounds (0..<\(count))")
@@ -285,7 +300,6 @@ extension ARScanner: ARSessionDelegate, ARSCNViewDelegate {
     }
     
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        // ✅ NEW: Capture image + pose every N frames
         captureManager.tryCapture(frame: frame)
         
         DispatchQueue.main.async {
@@ -323,4 +337,3 @@ extension ARScanner: ARSessionDelegate, ARSCNViewDelegate {
         }
     }
 }
-

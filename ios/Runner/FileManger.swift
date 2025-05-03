@@ -1,5 +1,4 @@
 import Foundation
-import ZIPFoundation
 import os // Import os for os_log and OSLog
 
 extension FileManager {
