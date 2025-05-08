@@ -4,6 +4,7 @@ import SceneKit
 import AVFoundation
 import SSZipArchive
 import os.log
+import Vision
 
 // Custom activity item source to prevent collaboration features
 @available(iOS 13.4, *)
@@ -399,14 +400,12 @@ extension ScanViewController: ARScannerDelegate {
         }
     }
     
-    func arScannerDidStartScanning(_ scanner: ARScanner) {
-        DispatchQueue.main.async {
-            self.controlPanel.updateUIForScanningState(isScanning: true, hasMeshes: false)
-        }
-    }
-    
     func arScanner(_ scanner: ARScanner, showAlertWithTitle title: String, message: String) {
         showAlert(title: title, message: message)
+    }
+    
+    func arScanner(_ scanner: ARScanner, didCaptureDebugImage image: UIImage) {
+        // Optional: Handle debug images if needed
     }
 }
 
@@ -420,6 +419,12 @@ extension ScanViewController: ScanCaptureManagerDelegate {
                 title: "Storage Full",
                 message: "Scan stopped. You've reached the 500MB storage limit."
             )
+        }
+    }
+    
+    func scanCaptureManager(_ manager: ScanCaptureManager, didUpdateStatus status: String) {
+        DispatchQueue.main.async {
+            self.controlPanel.updateStatus(status)
         }
     }
 }

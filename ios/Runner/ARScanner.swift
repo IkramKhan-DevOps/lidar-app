@@ -7,6 +7,7 @@ protocol ARScannerDelegate: AnyObject {
     func arScanner(_ scanner: ARScanner, didUpdateMeshesCount count: Int)
     func arScannerDidStopScanning(_ scanner: ARScanner)
     func arScanner(_ scanner: ARScanner, showAlertWithTitle title: String, message: String)
+    func arScanner(_ scanner: ARScanner, didCaptureDebugImage image: UIImage)
 }
 
 @available(iOS 13.4, *)
@@ -16,8 +17,6 @@ class ARScanner: NSObject {
     private var allCapturedMeshes = [UUID: CapturedMesh]()
     private var meshNodes = [UUID: SCNNode]()
     private let meshProcessingQueue = DispatchQueue(label: "mesh.processing.queue", qos: .userInitiated)
-
-    // Capture images and camera transforms
     private let captureManager = ScanCaptureManager()
     
     var view: ARSCNView { return arView }
@@ -29,6 +28,7 @@ class ARScanner: NSObject {
         arView.session.delegate = self
         arView.automaticallyUpdatesLighting = true
         arView.antialiasingMode = .multisampling4X
+        captureManager.delegate = self
     }
     
     func startScan() {
@@ -50,7 +50,7 @@ class ARScanner: NSObject {
         
         arView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
         isScanning = true
-        delegate?.arScanner(self, didUpdateStatus: "Scanning... Move slowly")
+        delegate?.arScanner(self, didUpdateStatus: "Scanning initialized - move slowly")
     }
     
     func stopScan() {
@@ -66,6 +66,7 @@ class ARScanner: NSObject {
         allCapturedMeshes.removeAll()
         meshNodes.values.forEach { $0.removeFromParentNode() }
         meshNodes.removeAll()
+        captureManager.cleanupCaptureDirectory()
         startScan()
     }
     
@@ -73,7 +74,6 @@ class ARScanner: NSObject {
         return Array(allCapturedMeshes.values)
     }
     
-    // MARK: - Mesh Processing
     private func process(_ meshAnchor: ARMeshAnchor) {
         let geometry = meshAnchor.geometry
         let transform = meshAnchor.transform
@@ -90,7 +90,7 @@ class ARScanner: NSObject {
                 self.arView.scene.rootNode.addChildNode(node)
                 self.meshNodes[meshAnchor.identifier] = node
             } catch {
-                print("Error creating mesh node: \(error)")
+                self.delegate?.arScanner(self, didUpdateStatus: "Mesh processing error: \(error.localizedDescription)")
             }
         }
         
@@ -99,7 +99,7 @@ class ARScanner: NSObject {
             
             do {
                 let vertices = try self.extractVertices(from: geometry.vertices)
-                let normals = try self.extractNormals(from: geometry.normals) // Fixed: Removed force unwrap
+                let normals = try self.extractNormals(from: geometry.normals)
                 let indices = try self.extractIndices(from: geometry.faces)
                 
                 let mesh = CapturedMesh(
@@ -112,10 +112,9 @@ class ARScanner: NSObject {
                 DispatchQueue.main.async {
                     self.allCapturedMeshes[meshAnchor.identifier] = mesh
                     self.delegate?.arScanner(self, didUpdateMeshesCount: self.allCapturedMeshes.count)
-                    self.delegate?.arScanner(self, didUpdateStatus: "Scanning... (\(self.allCapturedMeshes.count) meshes captured)")
                 }
             } catch {
-                print("Mesh processing error: \(error)")
+                self.delegate?.arScanner(self, didUpdateStatus: "Mesh extraction error: \(error.localizedDescription)")
             }
         }
     }
@@ -228,7 +227,72 @@ class ARScanner: NSObject {
     }
 }
 
-// MARK: - Safe Buffer Access Extensions
+@available(iOS 13.4, *)
+extension ARScanner: ARSessionDelegate, ARSCNViewDelegate {
+    func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
+        for anchor in anchors {
+            if let meshAnchor = anchor as? ARMeshAnchor {
+                process(meshAnchor)
+            }
+        }
+    }
+    
+    func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        captureManager.tryCapture(frame: frame)
+        
+        DispatchQueue.main.async {
+            switch frame.worldMappingStatus {
+            case .notAvailable:
+                self.delegate?.arScanner(self, didUpdateStatus: "Move slowly to initialize tracking")
+            case .limited:
+                self.delegate?.arScanner(self, didUpdateStatus: "Limited tracking - move slowly, ensure features")
+            case .extending:
+                self.delegate?.arScanner(self, didUpdateStatus: "Extending map - good progress")
+            case .mapped:
+                self.delegate?.arScanner(self, didUpdateStatus: "Environment mapped - continue scanning")
+            @unknown default:
+                self.delegate?.arScanner(self, didUpdateStatus: "Unknown mapping status")
+            }
+
+            switch frame.camera.trackingState {
+            case .normal:
+                break
+            case .notAvailable:
+                self.delegate?.arScanner(self, didUpdateStatus: "Tracking not available - check device")
+            case .limited(.excessiveMotion):
+                self.delegate?.arScanner(self, didUpdateStatus: "Slow down - moving too fast")
+            case .limited(.insufficientFeatures):
+                self.delegate?.arScanner(self, didUpdateStatus: "Add more features - too plain")
+            case .limited(.initializing):
+                self.delegate?.arScanner(self, didUpdateStatus: "Initializing - move slowly")
+            case .limited(.relocalizing):
+                self.delegate?.arScanner(self, didUpdateStatus: "Relocalizing - return to start")
+            case .limited(_):
+                self.delegate?.arScanner(self, didUpdateStatus: "Tracking limited - check environment")
+            @unknown default:
+                self.delegate?.arScanner(self, didUpdateStatus: "Unknown tracking issue")
+            }
+        }
+    }
+}
+
+@available(iOS 13.4, *)
+extension ARScanner: ScanCaptureManagerDelegate {
+    func scanCaptureManagerReachedStorageLimit(_ manager: ScanCaptureManager) {
+        DispatchQueue.main.async {
+            self.stopScan()
+            self.delegate?.arScanner(self, showAlertWithTitle: "Storage Full",
+                                   message: "Scan stopped. You've reached the 500MB storage limit.")
+        }
+    }
+    
+    func scanCaptureManager(_ manager: ScanCaptureManager, didUpdateStatus status: String) {
+        delegate?.arScanner(self, didUpdateStatus: status)
+    }
+}
+
+import ARKit
+
 @available(iOS 13.4, *)
 struct GeometrySourceError: Error {
     let message: String
@@ -288,51 +352,25 @@ extension ARGeometryElement {
     }
 }
 
-// MARK: - ARSessionDelegate, ARSCNViewDelegate
-@available(iOS 13.4, *)
-extension ARScanner: ARSessionDelegate, ARSCNViewDelegate {
-    func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
-        for anchor in anchors {
-            if let meshAnchor = anchor as? ARMeshAnchor {
-                process(meshAnchor)
-            }
-        }
-    }
-    
-    func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        captureManager.tryCapture(frame: frame)
-        
-        DispatchQueue.main.async {
-            switch frame.worldMappingStatus {
-            case .notAvailable:
-                self.delegate?.arScanner(self, didUpdateStatus: "Move slowly to initialize tracking")
-            case .limited:
-                self.delegate?.arScanner(self, didUpdateStatus: "Limited tracking - move slowly, ensure features")
-            case .extending:
-                self.delegate?.arScanner(self, didUpdateStatus: "Extending map - good progress")
-            case .mapped:
-                self.delegate?.arScanner(self, didUpdateStatus: "Environment mapped - continue scanning")
+extension ARCamera.TrackingState: CustomStringConvertible {
+    public var description: String {
+        switch self {
+        case .normal:
+            return "Normal"
+        case .notAvailable:
+            return "Not Available"
+        case .limited(let reason):
+            switch reason {
+            case .excessiveMotion:
+                return "Limited - Excessive Motion"
+            case .insufficientFeatures:
+                return "Limited - Insufficient Features"
+            case .initializing:
+                return "Limited - Initializing"
+            case .relocalizing:
+                return "Limited - Relocalizing"
             @unknown default:
-                self.delegate?.arScanner(self, didUpdateStatus: "Unknown mapping status")
-            }
-
-            switch frame.camera.trackingState {
-            case .normal:
-                break
-            case .notAvailable:
-                self.delegate?.arScanner(self, didUpdateStatus: "Tracking not available - check device")
-            case .limited(.excessiveMotion):
-                self.delegate?.arScanner(self, didUpdateStatus: "Slow down - moving too fast")
-            case .limited(.insufficientFeatures):
-                self.delegate?.arScanner(self, didUpdateStatus: "Add more features - too plain")
-            case .limited(.initializing):
-                self.delegate?.arScanner(self, didUpdateStatus: "Initializing - move slowly")
-            case .limited(.relocalizing):
-                self.delegate?.arScanner(self, didUpdateStatus: "Relocalizing - return to start")
-            case .limited(_):
-                self.delegate?.arScanner(self, didUpdateStatus: "Tracking limited - check environment")
-            @unknown default:
-                self.delegate?.arScanner(self, didUpdateStatus: "Unknown tracking issue")
+                return "Limited - Unknown Reason"
             }
         }
     }
