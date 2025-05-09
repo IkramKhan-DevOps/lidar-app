@@ -6,7 +6,6 @@ import SSZipArchive
 import os.log
 import Vision
 
-// Custom activity item source to prevent collaboration features
 @available(iOS 13.4, *)
 class NonCollaborativeFileActivityItem: NSObject, UIActivityItemSource {
     let fileURL: URL
@@ -24,7 +23,6 @@ class NonCollaborativeFileActivityItem: NSObject, UIActivityItemSource {
         return fileURL
     }
     
-    // Explicitly disable collaboration features
     func activityViewController(_ activityViewController: UIActivityViewController, dataTypeIdentifierForActivityType activityType: UIActivity.ActivityType?) -> String {
         return "public.zip-archive"
     }
@@ -33,20 +31,15 @@ class NonCollaborativeFileActivityItem: NSObject, UIActivityItemSource {
 @available(iOS 13.4, *)
 class ScanViewController: UIViewController {
     
-    // MARK: - Components
     private let arScanner = ARScanner()
     let captureManager = ScanCaptureManager()
     private let controlPanel = ControlPanel()
     private let fileManager = FileManager.default
     
-    // Current export state
     private var currentExportURL: URL?
     private var activityIndicator: UIActivityIndicatorView?
-    
-    // Flag to track if we're presenting the preview
     private var isPresentingPreview: Bool = false
     
-    // MARK: - Lifecycle
     override func viewDidLoad() {
         super.viewDidLoad()
         setupUI()
@@ -69,7 +62,6 @@ class ScanViewController: UIViewController {
         isPresentingPreview = false
     }
     
-    // MARK: - Setup
     private func setupUI() {
         view.backgroundColor = .black
         
@@ -99,7 +91,6 @@ class ScanViewController: UIViewController {
         activityIndicator = indicator
     }
     
-    // MARK: - Permission Handling
     private func checkCameraPermission() {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
@@ -119,7 +110,6 @@ class ScanViewController: UIViewController {
         }
     }
     
-    // MARK: - Data Management
     private func saveCapturedMeshes() throws -> URL {
         let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let fileURL = documentsURL.appendingPathComponent("scan_\(Date().timeIntervalSince1970).json")
@@ -193,7 +183,6 @@ class ScanViewController: UIViewController {
         present(activityVC, animated: true)
     }
     
-    // MARK: - File Cleanup
     private func cleanupTemporaryFiles() {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             self?.captureManager.cleanupCaptureDirectory()
@@ -221,7 +210,6 @@ class ScanViewController: UIViewController {
         }
     }
     
-    // MARK: - UI Helpers
     private func showAlert(title: String, message: String) {
         DispatchQueue.main.async {
             let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
@@ -250,7 +238,6 @@ class ScanViewController: UIViewController {
         }
     }
     
-    // MARK: - Export Methods
     private func exportAsZIP() {
         let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let zipURL = documentsURL.appendingPathComponent("ExportedScan_\(UUID().uuidString).zip")
@@ -377,7 +364,6 @@ class ScanViewController: UIViewController {
     }
 }
 
-// MARK: - ARScannerDelegate
 @available(iOS 13.4, *)
 extension ScanViewController: ARScannerDelegate {
     func arScanner(_ scanner: ARScanner, didUpdateStatus status: String) {
@@ -409,7 +395,6 @@ extension ScanViewController: ARScannerDelegate {
     }
 }
 
-// MARK: - ScanCaptureManagerDelegate
 @available(iOS 13.4, *)
 extension ScanViewController: ScanCaptureManagerDelegate {
     func scanCaptureManagerReachedStorageLimit(_ manager: ScanCaptureManager) {
@@ -417,7 +402,7 @@ extension ScanViewController: ScanCaptureManagerDelegate {
             self.arScanner.stopScan()
             self.showAlert(
                 title: "Storage Full",
-                message: "Scan stopped. You've reached the 500MB storage limit."
+                message: "Storage is full! Export your scan to free up space."
             )
         }
     }
@@ -429,7 +414,6 @@ extension ScanViewController: ScanCaptureManagerDelegate {
     }
 }
 
-// MARK: - ControlPanelDelegate
 @available(iOS 13.4, *)
 extension ScanViewController: ControlPanelDelegate {
     func controlPanelDidTapStart(_ panel: ControlPanel) {
