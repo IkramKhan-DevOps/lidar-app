@@ -1,0 +1,13 @@
+platform :ios, '13.4'
+
+target 'Runner' do
+  use_frameworks!
+  pod 'SSZipArchive', '~> 2.4'
+
+  # Pods for Runner
+
+  target 'RunnerTests' do
+    inherit! :search_paths
+    # Pods for testing
+  end
+end
