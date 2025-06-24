@@ -34,6 +34,8 @@
 	<string>App needs access to documents to save and share scan exports</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>We need your location to geotag your scan data.</string>
+	<key>NSUserNotificationsUsageDescription</key>
+	<string>We need to send notifications when your model is ready to view.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIFileSharingEnabled</key>
@@ -54,6 +56,17 @@
 		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+		<string>remote-notification</string>
+		<string>processing</string>
 	</array>
 </dict>
 </plist>

@@ -2,12 +2,14 @@ import UIKit
 import Flutter
 import ARKit
 import CoreLocation
+import os // Added to resolve os_log errors
 
-@main
+@UIApplicationMain
 @objc class AppDelegate: FlutterAppDelegate {
     
     var locationManager: LocationManager?
-
+    var backgroundSessionCompletionHandler: (() -> Void)?
+    
     override func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -27,9 +29,19 @@ import CoreLocation
             }
         }
 
+        // Register for local notifications
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
+            if let error = error {
+                os_log("❌ Notification permission error: %@", log: .default, type: .error, error.localizedDescription)
+            }
+            if granted {
+                os_log("✅ Notification permission granted", log: .default, type: .info)
+            }
+        }
+
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
-
+    
     private func startLiDARScan(result: @escaping FlutterResult) {
         DispatchQueue.main.async {
             if #available(iOS 13.4, *) {
@@ -46,5 +58,10 @@ import CoreLocation
                 ))
             }
         }
+    }
+    
+    override func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String, completionHandler: @escaping () -> Void) {
+        backgroundSessionCompletionHandler = completionHandler
+        os_log("✅ Handling background URLSession events for identifier: %@", log: .default, type: .info, identifier)
     }
 }
