@@ -4,7 +4,7 @@ import ARKit
 import CoreLocation
 import os // Added to resolve os_log errors
 
-@UIApplicationMain
+@main
 @objc class AppDelegate: FlutterAppDelegate {
     
     var locationManager: LocationManager?

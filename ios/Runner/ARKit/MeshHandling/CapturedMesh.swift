@@ -1,34 +1,33 @@
+import ARKit
 import simd
 
-struct CapturedMesh: Codable {
-    var vertices: [SIMD3<Float>]
-    var normals: [SIMD3<Float>]
-    var indices: [UInt32]
-    var transform: [[Float]]
+public struct CapturedMesh: Codable {
+    public var vertices: [SIMD3<Float>]
+    public var normals: [SIMD3<Float>]
+    public var indices: [UInt32]
+    public var transform: [[Float]]
     
-    init(vertices: [SIMD3<Float>], normals: [SIMD3<Float>], indices: [UInt32], transform: simd_float4x4) {
+    public init(vertices: [SIMD3<Float>], normals: [SIMD3<Float>], indices: [UInt32], transform: simd_float4x4) {
         self.vertices = vertices
         self.normals = normals
         self.indices = indices
         self.transform = transform.toArray()
     }
     
-    init(vertices: [SIMD3<Float>], indices: [UInt32], transform: simd_float4x4) {
-        self.vertices = vertices
-        self.normals = [SIMD3<Float>](repeating: SIMD3<Float>(0, 0, 0), count: vertices.count)
-        self.indices = indices
-        self.transform = transform.toArray()
+    public var serializableRepresentation: [String: Any] {
+        return [
+            "vertices": vertices.map { ["x": $0.x, "y": $0.y, "z": $0.z] },
+            "normals": normals.map { ["x": $0.x, "y": $0.y, "z": $0.z] },
+            "indices": indices,
+            "transform": transform
+        ]
     }
     
-    func getTransform() -> simd_float4x4 {
-        return simd_float4x4(self.transform)
-    }
-    
-    func exportAsPLY() -> String {
+    public func exportAsPLY() -> String {
         var header = """
         ply
         format ascii 1.0
-        comment Generated from LiDAR scan
+        comment Generated from ARKit scan
         element vertex \(vertices.count)
         property float x
         property float y
@@ -57,7 +56,7 @@ struct CapturedMesh: Codable {
 }
 
 extension simd_float4x4 {
-    func toArray() -> [[Float]] {
+    public func toArray() -> [[Float]] {
         return [
             [columns.0.x, columns.0.y, columns.0.z, columns.0.w],
             [columns.1.x, columns.1.y, columns.1.z, columns.1.w],
@@ -66,7 +65,7 @@ extension simd_float4x4 {
         ]
     }
     
-    init(_ array: [[Float]]) {
+    public init(_ array: [[Float]]) {
         self.init(
             SIMD4<Float>(array[0][0], array[0][1], array[0][2], array[0][3]),
             SIMD4<Float>(array[1][0], array[1][1], array[1][2], array[1][3]),
