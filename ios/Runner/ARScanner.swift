@@ -3,26 +3,12 @@ import SceneKit
 import Foundation
 import os.log
 import UIKit
-import ARKit
-import SceneKit
 import AVFoundation
 import SSZipArchive
-import os.log
 import Vision
 import CoreLocation
-import UIKit
-import SceneKit
-import SSZipArchive
-import os.log
 import simd
 import QuickLook
-import UIKit
-import simd
-import UIKit
-import ARKit
-import os.log
-import Foundation
-import os // Import os for os_log and OSLog
 
 @available(iOS 13.4, *)
 protocol ARScannerDelegate: AnyObject {
@@ -51,7 +37,6 @@ class ARScanner: NSObject {
     var view: ARSCNView { return arView }
     var isScanning: Bool = false
     
-    // MARK: - Bounding Box for Scene Coverage
     struct BoundingBox {
         var min: simd_float3 = .init(repeating: Float.greatestFiniteMagnitude)
         var max: simd_float3 = .init(repeating: -Float.greatestFiniteMagnitude)
@@ -107,7 +92,7 @@ class ARScanner: NSObject {
         arView.session.pause()
         isScanning = false
         delegate?.arScannerDidStopScanning(self)
-        updateStatus("Scan paused. You can resume or export your work.", isCritical: true)
+        updateStatus("Scan paused. Preparing model view...", isCritical: true)
     }
     
     func restartScan() {
@@ -132,7 +117,6 @@ class ARScanner: NSObject {
         let geometry = meshAnchor.geometry
         let transform = meshAnchor.transform
         
-        // Update scene bounds
         updateSceneBounds(with: geometry.vertices)
         
         DispatchQueue.main.async { [weak self] in
@@ -297,15 +281,12 @@ class ARScanner: NSObject {
         return indices
     }
     
-    // MARK: - Enhanced Status Messaging
-    
     private func shouldUpdateMessage(_ message: String, isCritical: Bool) -> Bool {
         guard !isCritical else { return true }
         
         let now = Date()
         let timeSinceLast = now.timeIntervalSince(lastMessageTime)
         
-        // Skip Levenshtein for empty or identical messages
         if message.isEmpty || lastMessage == nil || message == lastMessage {
             return false
         }
@@ -357,7 +338,6 @@ class ARScanner: NSObject {
     private func provideScanningGuidance(frame: ARFrame) {
         let cameraPos = frame.camera.transform.columns.3.xyz
         
-        // Track camera movement
         cameraPositions.append(cameraPos)
         if cameraPositions.count > 60 { cameraPositions.removeFirst() }
         
@@ -398,8 +378,7 @@ class ARScanner: NSObject {
     private func estimateSceneCoverage() -> Float {
         guard sceneBounds.volume > 0 else { return 0.0 }
         
-        // Simplified convex hull volume approximation
-        let coveredPoints = Float(allCapturedMeshes.count * 1000) // Approximate points per mesh
+        let coveredPoints = Float(allCapturedMeshes.count * 1000)
         let totalVolume = sceneBounds.volume
         let estimatedCoverage = Swift.min(1.0, coveredPoints / (totalVolume * 1000.0))
         return estimatedCoverage
@@ -409,20 +388,19 @@ class ARScanner: NSObject {
         let upVector = simd_float3(0, 1, 0)
         let cameraForward = simd_float3(transform.columns.2.x, transform.columns.2.y, transform.columns.2.z)
         let angle = atan2(cameraForward.y, sqrt(cameraForward.x * cameraForward.x + cameraForward.z * cameraForward.z))
-        return angle * 180.0 / .pi // Convert radians to degrees
+        return angle * 180.0 / .pi
     }
     
     private func isMakingCircularMotion() -> Bool {
         guard cameraPositions.count >= 20 else { return false }
         
-        // Analyze last 20 positions for circular pattern
         let recentPositions = cameraPositions.suffix(20)
         let center = recentPositions.reduce(simd_float3.zero) { $0 + $1 } / Float(recentPositions.count)
         let distances = recentPositions.map { simd_distance($0, center) }
         let avgDistance = distances.reduce(0, +) / Float(distances.count)
         let variance = distances.map { pow($0 - avgDistance, 2) }.reduce(0, +) / Float(distances.count)
         
-        return variance < 0.1 // Low variance indicates circular motion
+        return variance < 0.1
     }
     
     private func isRepeatingPath(cameraPos: simd_float3) -> Bool {
@@ -434,12 +412,11 @@ class ARScanner: NSObject {
         let distance = simd_distance(cameraPos, lastPos)
         lastCameraPosition = cameraPos
         
-        // Check if camera is lingering in same area
         let recentPositions = cameraPositions.suffix(10)
         let avgPosition = recentPositions.reduce(simd_float3.zero) { $0 + $1 } / Float(recentPositions.count)
         let maxDistance = recentPositions.map { simd_distance($0, avgPosition) }.max() ?? 0
         
-        return distance < 0.1 && maxDistance < 0.2 // Small movements in confined area
+        return distance < 0.1 && maxDistance < 0.2
     }
     
     private func setupThermalStateObserver() {
@@ -471,13 +448,11 @@ extension ARScanner: ARSessionDelegate, ARSCNViewDelegate {
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         captureManager.tryCapture(frame: frame)
         
-        // Check light conditions
         if let lightEstimate = frame.lightEstimate?.ambientIntensity, lightEstimate < 100 {
             updateStatus("It's a bit dark here. Try adding more light for better results.", isCritical: false)
             return
         }
         
-        // Check world mapping status
         switch frame.worldMappingStatus {
         case .notAvailable:
             updateStatus("Start exploring! Move your device slowly to map the area.", isCritical: false)
@@ -491,10 +466,9 @@ extension ARScanner: ARSessionDelegate, ARSCNViewDelegate {
             updateStatus("Something's off. Try moving slowly or restarting the scan.", isCritical: false)
         }
         
-        // Check camera tracking state
         switch frame.camera.trackingState {
         case .normal:
-            break // Use world mapping status and enhanced feedback
+            break
         case .notAvailable:
             updateStatus("Hmm, I can't track right now. Try restarting the scan.", isCritical: false)
         case .limited(.excessiveMotion):
@@ -511,7 +485,6 @@ extension ARScanner: ARSessionDelegate, ARSCNViewDelegate {
             updateStatus("Something's off. Try moving slowly or restarting the scan.", isCritical: false)
         }
         
-        // Enhanced feedback
         analyzeSurfaceFeatures(frame: frame)
         provideScanningGuidance(frame: frame)
         provideTemporalGuidance()
@@ -526,7 +499,7 @@ extension ARScanner: ScanCaptureManagerDelegate {
         DispatchQueue.main.async {
             self.stopScan()
             self.delegate?.arScanner(self, showAlertWithTitle: "Storage Full",
-                                   message: "Storage is full! Export your scan to free up space.")
+                                   message: "Storage is full! Clear some space or process your scan.")
         }
     }
     
@@ -596,7 +569,6 @@ extension ARGeometryElement {
 
 extension String {
     func levenshteinDistance(to other: String) -> Double {
-        // Handle empty string cases
         if self.isEmpty && other.isEmpty {
             return 0.0
         }
@@ -619,9 +591,9 @@ extension String {
             for j in 1...n {
                 let cost = self[self.index(self.startIndex, offsetBy: i - 1)] == other[other.index(other.startIndex, offsetBy: j - 1)] ? 0 : 1
                 matrix[i][j] = Swift.min(
-                    matrix[i-1][j] + 1,     // deletion
-                    matrix[i][j-1] + 1,     // insertion
-                    matrix[i-1][j-1] + cost // substitution
+                    matrix[i-1][j] + 1,
+                    matrix[i][j-1] + 1,
+                    matrix[i-1][j-1] + cost
                 )
             }
         }
@@ -654,38 +626,12 @@ extension ARCamera.TrackingState: CustomStringConvertible {
     }
 }
 
-
-@available(iOS 13.4, *)
-class NonCollaborativeFileActivityItem: NSObject, UIActivityItemSource {
-    let fileURL: URL
-    
-    init(fileURL: URL) {
-        self.fileURL = fileURL
-        super.init()
-    }
-    
-    func activityViewControllerPlaceholderItem(_ activityViewController: UIActivityViewController) -> Any {
-        return fileURL
-    }
-    
-    func activityViewController(_ activityViewController: UIActivityViewController, itemForActivityType activityType: UIActivity.ActivityType?) -> Any? {
-        return fileURL
-    }
-    
-    func activityViewController(_ activityViewController: UIActivityViewController, dataTypeIdentifierForActivityType activityType: UIActivity.ActivityType?) -> String {
-        return "public.zip-archive"
-    }
-}
-
 @available(iOS 13.4, *)
 class ScanViewController: UIViewController {
-    
     private let arScanner = ARScanner()
     let captureManager = ScanCaptureManager()
     private let controlPanel = ControlPanel()
-    private let fileManager = FileManager.default
     
-    private var currentExportURL: URL?
     private var activityIndicator: UIActivityIndicatorView?
     private var isPresentingPreview: Bool = false
     
@@ -759,103 +705,10 @@ class ScanViewController: UIViewController {
         }
     }
     
-    private func saveCapturedMeshes() throws -> URL {
-        let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let fileURL = documentsURL.appendingPathComponent("scan_\(Date().timeIntervalSince1970).json")
-        
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = .prettyPrinted
-        let data = try encoder.encode(arScanner.getCapturedMeshes())
-        try data.write(to: fileURL, options: [.atomicWrite, .completeFileProtection])
-        
-        return fileURL
-    }
-    
-    private func generatePLYContent() throws -> String {
-        let meshes = arScanner.getCapturedMeshes()
-        guard !meshes.isEmpty else {
-            throw NSError(domain: "No meshes", code: 0, userInfo: nil)
-        }
-        
-        var vertexOffset = 0
-        var combinedVertices: [SIMD3<Float>] = []
-        var combinedNormals: [SIMD3<Float>] = []
-        var combinedIndices: [UInt32] = []
-        
-        for mesh in meshes {
-            combinedVertices.append(contentsOf: mesh.vertices)
-            combinedNormals.append(contentsOf: mesh.normals)
-            combinedIndices.append(contentsOf: mesh.indices.map { $0 + UInt32(vertexOffset) })
-            vertexOffset += mesh.vertices.count
-        }
-        
-        let combinedMesh = CapturedMesh(
-            vertices: combinedVertices,
-            normals: combinedNormals,
-            indices: combinedIndices,
-            transform: matrix_identity_float4x4
-        )
-        
-        return combinedMesh.exportAsPLY()
-    }
-    
-    private func savePLYFile(content: String) throws -> URL {
-        let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let fileURL = documentsURL.appendingPathComponent("scan_\(Date().timeIntervalSince1970).ply")
-        try content.write(to: fileURL, atomically: true, encoding: .utf8)
-        return fileURL
-    }
-    
-    private func shareFile(_ fileURL: URL) {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            showAlert(title: "Export Error", message: "File not found at path: \(fileURL.path)")
-            return
-        }
-        
-        let didStartAccessing = fileURL.startAccessingSecurityScopedResource()
-        defer {
-            if didStartAccessing {
-                fileURL.stopAccessingSecurityScopedResource()
-            }
-        }
-        
-        let activityVC = UIActivityViewController(activityItems: [NonCollaborativeFileActivityItem(fileURL: fileURL)], applicationActivities: nil)
-        activityVC.popoverPresentationController?.sourceView = controlPanel
-        activityVC.popoverPresentationController?.sourceRect = controlPanel.bounds
-        
-        activityVC.completionWithItemsHandler = { [weak self] _, completed, _, _ in
-            if completed {
-                self?.cleanupAfterExport()
-            }
-        }
-        
-        present(activityVC, animated: true)
-    }
-    
     private func cleanupTemporaryFiles() {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             self?.captureManager.cleanupCaptureDirectory()
             os_log("Cleaned up temporary capture files", log: OSLog.default, type: .info)
-        }
-    }
-    
-    private func cleanupAfterExport() {
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            if let url = self?.currentExportURL {
-                try? FileManager.default.removeItem(at: url)
-                self?.currentExportURL = nil
-            }
-            self?.captureManager.cleanupCaptureDirectory()
-            os_log("Cleaned up all files after export", log: OSLog.default, type: .info)
-        }
-    }
-    
-    private func cleanupExportedFile(_ fileURL: URL) {
-        DispatchQueue.global(qos: .utility).async {
-            if FileManager.default.fileExists(atPath: fileURL.path) {
-                try? FileManager.default.removeItem(at: fileURL)
-                os_log("Deleted exported file", log: OSLog.default, type: .info)
-            }
         }
     }
     
@@ -867,16 +720,7 @@ class ScanViewController: UIViewController {
         }
     }
     
-    private func showExportError(_ message: String) {
-        DispatchQueue.main.async { [weak self] in
-            self?.activityIndicator?.stopAnimating()
-            let alert = UIAlertController(title: "Export Failed", message: message, preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "OK", style: .default))
-            self?.present(alert, animated: true)
-        }
-    }
-    
-    private func showPreview() {
+    private func showModelView() {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.isPresentingPreview = true
@@ -884,131 +728,6 @@ class ScanViewController: UIViewController {
             previewVC.capturedMeshes = self.arScanner.getCapturedMeshes()
             previewVC.modalPresentationStyle = .fullScreen
             self.present(previewVC, animated: true)
-        }
-    }
-    
-    private func exportAsZIP() {
-        let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let zipURL = documentsURL.appendingPathComponent("ExportedScan_\(UUID().uuidString).zip")
-        let exportFolderURL = documentsURL.appendingPathComponent("ScanExport_\(UUID().uuidString)")
-        
-        if FileManager.default.fileExists(atPath: zipURL.path) {
-            try? FileManager.default.removeItem(at: zipURL)
-        }
-        
-        activityIndicator?.startAnimating()
-        
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else { return }
-            
-            do {
-                try self.fileManager.createDirectory(at: exportFolderURL, withIntermediateDirectories: true)
-                
-                let modelURL = exportFolderURL.appendingPathComponent("model.ply")
-                let plyContent = try self.generatePLYContent()
-                try plyContent.write(to: modelURL, atomically: true, encoding: .utf8)
-                
-                let imagesFolderURL = documentsURL.appendingPathComponent("ScanCapture")
-                if self.fileManager.fileExists(atPath: imagesFolderURL.path) {
-                    let destinationImagesURL = exportFolderURL.appendingPathComponent("images")
-                    try self.fileManager.copyItem(at: imagesFolderURL, to: destinationImagesURL)
-                }
-                
-                let success = SSZipArchive.createZipFile(atPath: zipURL.path, withContentsOfDirectory: exportFolderURL.path)
-                if !success {
-                    throw NSError(domain: "SSZipArchive", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create ZIP file"])
-                }
-                
-                try? self.fileManager.removeItem(at: exportFolderURL)
-                
-                DispatchQueue.main.async {
-                    self.activityIndicator?.stopAnimating()
-                    
-                    guard FileManager.default.fileExists(atPath: zipURL.path) else {
-                        self.showExportError("Failed to create ZIP file")
-                        return
-                    }
-                    
-                    self.currentExportURL = zipURL
-                    let didStartAccessing = zipURL.startAccessingSecurityScopedResource()
-                    
-                    let activityVC = UIActivityViewController(
-                        activityItems: [NonCollaborativeFileActivityItem(fileURL: zipURL)],
-                        applicationActivities: nil
-                    )
-                    
-                    var excludedActivities: [UIActivity.ActivityType] = [
-                        .addToReadingList, .assignToContact, .markupAsPDF,
-                        .openInIBooks, .postToWeibo, .print, .saveToCameraRoll,
-                        .postToVimeo, .postToFlickr, .postToTencentWeibo,
-                        .postToFacebook, .postToTwitter, .airDrop, .copyToPasteboard,
-                        .mail, .message
-                    ]
-                    
-                    if #available(iOS 16.0, *) {
-                        excludedActivities.append(contentsOf: [
-                            .collaborationCopyLink, .collaborationInviteWithLink
-                        ])
-                    }
-                    
-                    activityVC.excludedActivityTypes = excludedActivities
-                    
-                    if let popover = activityVC.popoverPresentationController {
-                        popover.sourceView = self.controlPanel.exportButton
-                        popover.sourceRect = self.controlPanel.exportButton.bounds
-                    }
-                    
-                    activityVC.completionWithItemsHandler = { [weak self] _, completed, _, _ in
-                        if didStartAccessing {
-                            zipURL.stopAccessingSecurityScopedResource()
-                        }
-                        if completed {
-                            self?.cleanupAfterExport()
-                        }
-                    }
-                    
-                    self.present(activityVC, animated: true)
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.activityIndicator?.stopAnimating()
-                    self.showExportError(error.localizedDescription)
-                }
-            }
-        }
-    }
-    
-    private func exportAsJSON() {
-        do {
-            let fileURL = try saveCapturedMeshes()
-            shareFile(fileURL)
-            cleanupAfterExport()
-        } catch {
-            showAlert(title: "Export Error", message: error.localizedDescription)
-        }
-    }
-    
-    private func exportAsPLY() {
-        activityIndicator?.startAnimating()
-        
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else { return }
-            
-            do {
-                let plyContent = try self.generatePLYContent()
-                let fileURL = try self.savePLYFile(content: plyContent)
-                
-                DispatchQueue.main.async {
-                    self.activityIndicator?.stopAnimating()
-                    self.shareFile(fileURL)
-                    self.cleanupAfterExport()
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.activityIndicator?.stopAnimating()
-                    self.showAlert(title: "Export Error", message: error.localizedDescription)
-                }
-            }
         }
     }
 }
@@ -1032,6 +751,9 @@ extension ScanViewController: ARScannerDelegate {
         DispatchQueue.main.async {
             self.controlPanel.updateUIForScanningState(isScanning: false,
                                                      hasMeshes: !scanner.getCapturedMeshes().isEmpty)
+            if !scanner.getCapturedMeshes().isEmpty {
+                self.showModelView()
+            }
         }
     }
     
@@ -1040,7 +762,6 @@ extension ScanViewController: ARScannerDelegate {
     }
     
     func arScanner(_ scanner: ARScanner, didCaptureDebugImage image: UIImage) {
-        // Optional: Handle debug images if needed
     }
 }
 
@@ -1051,7 +772,7 @@ extension ScanViewController: ScanCaptureManagerDelegate {
             self.arScanner.stopScan()
             self.showAlert(
                 title: "Storage Full",
-                message: "Storage is full! Export your scan to free up space."
+                message: "Storage is full! Clear some space or process your scan."
             )
         }
     }
@@ -1065,39 +786,19 @@ extension ScanViewController: ScanCaptureManagerDelegate {
 
 @available(iOS 13.4, *)
 extension ScanViewController: ControlPanelDelegate {
-    func controlPanelDidTapStart(_ panel: ControlPanel) {
-        arScanner.startScan()
-    }
-    
-    func controlPanelDidTapStop(_ panel: ControlPanel) {
-        arScanner.stopScan()
+    func controlPanelDidTapToggleScan(_ panel: ControlPanel) {
+        if arScanner.isScanning {
+            arScanner.stopScan()
+        } else {
+            arScanner.startScan()
+        }
     }
     
     func controlPanelDidTapRestart(_ panel: ControlPanel) {
         arScanner.restartScan()
         cleanupTemporaryFiles()
-        if let url = currentExportURL {
-            cleanupExportedFile(url)
-            currentExportURL = nil
-        }
-    }
-    
-    func controlPanelDidTapPreview(_ panel: ControlPanel) {
-        showPreview()
-    }
-    
-    func controlPanel(_ panel: ControlPanel, didRequestExportAs format: ExportFormat) {
-        switch format {
-        case .json:
-            exportAsJSON()
-        case .ply:
-            exportAsPLY()
-        case .zip:
-            exportAsZIP()
-        }
     }
 }
-
 
 protocol ScanCaptureManagerDelegate: AnyObject {
     func scanCaptureManagerReachedStorageLimit(_ manager: ScanCaptureManager)
@@ -1146,13 +847,11 @@ class ScanCaptureManager {
     }
 
     private func shouldCapture(frame: ARFrame) -> Bool {
-        // Check minimum time interval
         let currentTime = CACurrentMediaTime()
         guard currentTime - lastCaptureTime > Double(optimalFrameInterval)/30.0 else {
             return false
         }
         
-        // Check movement sufficient
         let currentPosition = frame.camera.transform.columns.3.xyz
         if let lastPosition = lastCameraPosition {
             let distance = simd_distance(currentPosition, lastPosition)
@@ -1162,20 +861,17 @@ class ScanCaptureManager {
             }
         }
         
-        // Check lighting conditions
         let avgBrightness = frame.lightEstimate?.ambientIntensity ?? 1000
         guard (300...2000).contains(avgBrightness) else {
             delegate?.scanCaptureManager(self, didUpdateStatus: "Skipping - poor lighting")
             return false
         }
         
-        // Check motion blur
         if let motion = frame.camera.trackingState.motionBlurEstimate, motion > 0.1 {
             delegate?.scanCaptureManager(self, didUpdateStatus: "Skipping - motion blur detected")
             return false
         }
         
-        // Check quality score
         let qualityScore = calculateQualityScore(frame: frame)
         adjustCaptureRate(qualityScore: qualityScore)
         
@@ -1185,29 +881,26 @@ class ScanCaptureManager {
     }
     
     private func calculateQualityScore(frame: ARFrame) -> Float {
-            var score: Float = 0
-            
-            // Tracking quality
-            switch frame.camera.trackingState {
-            case .normal: score += 0.4
-            case .limited: score += 0.2
-            default: score += 0
-            }
-            
-            // Feature point count
-            if let rawFeaturePoints = frame.rawFeaturePoints {
-                let featureDensity = Float(rawFeaturePoints.points.count) / 1000.0 // Fixed: Added .0 for Float conversion
-                score += min(featureDensity, 0.3)
-            }
-            
-            // Lighting
-            if let lightEstimate = frame.lightEstimate {
-                let normalizedLight = Float((lightEstimate.ambientIntensity - 300) / 1700.0) // Fixed: Explicit Float conversion
-                score += min(max(normalizedLight, 0), 0.3)
-            }
-            
-            return score
+        var score: Float = 0
+        
+        switch frame.camera.trackingState {
+        case .normal: score += 0.4
+        case .limited: score += 0.2
+        default: score += 0
         }
+        
+        if let rawFeaturePoints = frame.rawFeaturePoints {
+            let featureDensity = Float(rawFeaturePoints.points.count) / 1000.0
+            score += min(featureDensity, 0.3)
+        }
+        
+        if let lightEstimate = frame.lightEstimate {
+            let normalizedLight = Float((lightEstimate.ambientIntensity - 300) / 1700.0)
+            score += min(max(normalizedLight, 0), 0.3)
+        }
+        
+        return score
+    }
     
     private func adjustCaptureRate(qualityScore: Float) {
         let baseInterval = 10
@@ -1227,7 +920,6 @@ class ScanCaptureManager {
     private func preprocessImage(_ pixelBuffer: CVPixelBuffer) -> CGImage? {
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
         
-        // Auto-enhance
         let filters = ciImage.autoAdjustmentFilters(options: [.enhance: true])
         var processedImage = ciImage
         for filter in filters {
@@ -1235,7 +927,6 @@ class ScanCaptureManager {
             processedImage = filter.outputImage ?? processedImage
         }
         
-        // Local contrast enhancement
         let context = CIContext()
         guard let cgImage = context.createCGImage(processedImage, from: processedImage.extent) else {
             delegate?.scanCaptureManager(self, didUpdateStatus: "Failed to process image")
@@ -1254,7 +945,6 @@ class ScanCaptureManager {
                 try jpegData.write(to: imageURL)
                 currentStorageSize += Int64(jpegData.count)
                 
-                // Debug: Save feature visualization
                 if imageIndex % 20 == 0 {
                     let debugImage = debugVisualizeFeatures(image: uiImage)
                     let debugURL = captureFolderURL.appendingPathComponent("debug_\(imageIndex).jpg")
@@ -1269,7 +959,6 @@ class ScanCaptureManager {
     private func debugVisualizeFeatures(image: UIImage) -> UIImage {
         guard let ciImage = CIImage(image: image) else { return image }
         
-        // Replace SIFT with Vision framework feature detection
         let request = VNDetectFaceLandmarksRequest()
         let handler = VNImageRequestHandler(ciImage: ciImage)
         
@@ -1297,7 +986,6 @@ class ScanCaptureManager {
         UIGraphicsEndImageContext()
         return result ?? image
     }
-
 
     private func saveCameraTransform(transform: simd_float4x4, frame: ARFrame) {
         let confidence: Float
@@ -1378,19 +1066,14 @@ extension ARCamera.TrackingState {
     }
 }
 
-
-
 @available(iOS 13.4, *)
 class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDocumentPickerDelegate {
-    
-    // MARK: - Properties
     var capturedMeshes: [CapturedMesh] = []
     private let sceneView = SCNView()
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var modelUrl: URL?
     private var downloadedFileURL: URL?
     
-    // MARK: - UI Components
     private lazy var closeButton: UIButton = {
         let button = UIButton(type: .system)
         button.setTitle("Close", for: .normal)
@@ -1436,7 +1119,7 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         button.layer.shadowRadius = 4
         button.addTarget(self, action: #selector(downloadTapped), for: .touchUpInside)
         button.translatesAutoresizingMaskIntoConstraints = false
-        button.isHidden = true // Hidden until USDZ is loaded
+        button.isHidden = true
         return button
     }()
     
@@ -1453,7 +1136,7 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         button.layer.shadowRadius = 4
         button.addTarget(self, action: #selector(shareTapped), for: .touchUpInside)
         button.translatesAutoresizingMaskIntoConstraints = false
-        button.isHidden = true // Hidden until USDZ is loaded
+        button.isHidden = true
         return button
     }()
     
@@ -1479,14 +1162,12 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         return indicator
     }()
     
-    // MARK: - Lifecycle
     override func viewDidLoad() {
         super.viewDidLoad()
         setupUI()
         setupScene()
     }
     
-    // MARK: - Setup
     private func setupUI() {
         view.backgroundColor = .black
         view.addSubview(sceneView)
@@ -1584,7 +1265,6 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         sceneView.backgroundColor = .black
     }
     
-    // MARK: - Actions
     @objc private func closeTapped() {
         let alert = UIAlertController(
             title: "Close Viewer",
@@ -1665,7 +1345,6 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         generateHapticFeedback()
     }
     
-    // MARK: - Processing
     private func processZipFile(at zipURL: URL) throws {
         guard let zipData = try? Data(contentsOf: zipURL) else {
             throw NSError(domain: "FileError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to read ZIP file"])
@@ -1696,7 +1375,7 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
             if let error = error {
                 os_log("❌ API request failed: %@", log: .default, type: .error, error.localizedDescription)
                 DispatchQueue.main.async {
-                    self.showErrorAlert(message: "API request failed: \(error.localizedDescription)")
+                    self.showErrorAlertWithLink(message: "API request failed: \(error.localizedDescription)")
                     self.statusLabel.text = "Processing failed."
                     self.endBackgroundTask()
                 }
@@ -1707,7 +1386,7 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                 let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
                 os_log("❌ API returned non-200 status: %d", log: .default, type: .error, statusCode)
                 DispatchQueue.main.async {
-                    self.showErrorAlert(message: "API returned status code: \(statusCode)")
+                    self.showErrorAlertWithLink(message: "API returned status code: \(statusCode)")
                     self.statusLabel.text = "Processing failed."
                     self.endBackgroundTask()
                 }
@@ -1717,7 +1396,7 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
             guard let data = data else {
                 os_log("❌ No data received from API", log: .default, type: .error)
                 DispatchQueue.main.async {
-                    self.showErrorAlert(message: "No data received from API")
+                    self.showErrorAlertWithLink(message: "No data received from API")
                     self.statusLabel.text = "Processing failed."
                     self.endBackgroundTask()
                 }
@@ -1730,7 +1409,7 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                       let modelUrl = URL(string: modelUrlString) else {
                     os_log("❌ Invalid model URL in response", log: .default, type: .error)
                     DispatchQueue.main.async {
-                        self.showErrorAlert(message: "Invalid model URL in response")
+                        self.showErrorAlertWithLink(message: "Invalid model URL in response")
                         self.statusLabel.text = "Processing failed."
                         self.endBackgroundTask()
                     }
@@ -1742,7 +1421,7 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
             } catch {
                 os_log("❌ Failed to parse API response: %@", log: .default, type: .error, error.localizedDescription)
                 DispatchQueue.main.async {
-                    self.showErrorAlert(message: "Failed to parse API response: \(error.localizedDescription)")
+                    self.showErrorAlertWithLink(message: "Failed to parse API response: \(error.localizedDescription)")
                     self.statusLabel.text = "Processing failed."
                     self.endBackgroundTask()
                 }
@@ -1857,7 +1536,6 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         task.resume()
     }
     
-    // MARK: - QLPreviewControllerDataSource
     func numberOfPreviewItems(in controller: QLPreviewController) -> Int {
         return downloadedFileURL != nil ? 1 : 0
     }
@@ -1866,7 +1544,6 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         return downloadedFileURL! as NSURL
     }
     
-    // MARK: - UIDocumentPickerDelegate
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
         statusLabel.text = "Model saved successfully."
         generateHapticFeedback()
@@ -1876,7 +1553,6 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         statusLabel.text = "Download cancelled."
     }
     
-    // MARK: - USDZ Validation
     private func validateUSDZFile(at url: URL) throws -> Bool {
         let fileManager = FileManager.default
         let attributes = try fileManager.attributesOfItem(atPath: url.path)
@@ -1929,7 +1605,6 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         }
     }
     
-    // MARK: - ZIP Creation
     func exportDataAsZip(to destinationURL: URL) throws {
         let fileManager = FileManager.default
         let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -2025,7 +1700,6 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         return combinedMesh.exportAsPLY()
     }
     
-    // MARK: - Haptic Feedback
     private func generateHapticFeedback(_ type: UINotificationFeedbackGenerator.FeedbackType = .success) {
         let feedbackGenerator = UINotificationFeedbackGenerator()
         feedbackGenerator.prepare()
@@ -2033,30 +1707,19 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
     }
 }
 
-
+@available(iOS 13.4, *)
 protocol ControlPanelDelegate: AnyObject {
-    func controlPanelDidTapStart(_ panel: ControlPanel)
-    func controlPanelDidTapStop(_ panel: ControlPanel)
+    func controlPanelDidTapToggleScan(_ panel: ControlPanel)
     func controlPanelDidTapRestart(_ panel: ControlPanel)
-    func controlPanelDidTapPreview(_ panel: ControlPanel)
-    func controlPanel(_ panel: ControlPanel, didRequestExportAs format: ExportFormat)
 }
 
-enum ExportFormat {
-    case json
-    case ply
-    case zip  // ✅ Added ZIP export option
-}
-
+@available(iOS 13.4, *)
 class ControlPanel: UIStackView {
     let statusLabel = UILabel()
     let actionButtons = UIStackView()
     
-    let startButton = UIButton()
-    let stopButton = UIButton()
+    let toggleScanButton = UIButton()
     let restartButton = UIButton()
-    let previewButton = UIButton()
-    let exportButton = UIButton()
     
     weak var delegate: ControlPanelDelegate?
     
@@ -2077,7 +1740,6 @@ class ControlPanel: UIStackView {
         spacing = 12
         distribution = .fill
         
-        // Status Label
         statusLabel.textColor = .white
         statusLabel.font = .systemFont(ofSize: 16, weight: .medium)
         statusLabel.textAlignment = .center
@@ -2088,21 +1750,18 @@ class ControlPanel: UIStackView {
         addArrangedSubview(statusLabel)
         statusLabel.heightAnchor.constraint(equalToConstant: 44).isActive = true
         
-        // Action Buttons
         actionButtons.axis = .horizontal
         actionButtons.spacing = 12
-        actionButtons.distribution = .fillEqually
+        actionButtons.distribution = .fillProportionally
         addArrangedSubview(actionButtons)
         actionButtons.heightAnchor.constraint(equalToConstant: 50).isActive = true
         
-        // Configure buttons
-        configureButton(startButton, title: "Start", color: .systemGreen)
-        configureButton(stopButton, title: "Stop", color: .systemRed)
+        configureButton(toggleScanButton, title: "Start", color: .systemGreen)
         configureButton(restartButton, title: "Restart", color: .systemOrange)
-        configureButton(previewButton, title: "Preview", color: .systemPurple)
-        configureButton(exportButton, title: "Export", color: .systemBlue)
         
-        // Initial state
+        toggleScanButton.widthAnchor.constraint(equalToConstant: 100).isActive = true
+        restartButton.widthAnchor.constraint(equalToConstant: 100).isActive = true
+        
         updateUIForScanningState(isScanning: false, hasMeshes: false)
     }
     
@@ -2117,42 +1776,16 @@ class ControlPanel: UIStackView {
     }
     
     private func setupButtonActions() {
-        startButton.addTarget(self, action: #selector(startTapped), for: .touchUpInside)
-        stopButton.addTarget(self, action: #selector(stopTapped), for: .touchUpInside)
+        toggleScanButton.addTarget(self, action: #selector(toggleScanTapped), for: .touchUpInside)
         restartButton.addTarget(self, action: #selector(restartTapped), for: .touchUpInside)
-        previewButton.addTarget(self, action: #selector(previewTapped), for: .touchUpInside)
-        exportButton.addTarget(self, action: #selector(exportTapped), for: .touchUpInside)
     }
     
-    @objc private func startTapped() { delegate?.controlPanelDidTapStart(self) }
-    @objc private func stopTapped() { delegate?.controlPanelDidTapStop(self) }
-    @objc private func restartTapped() { delegate?.controlPanelDidTapRestart(self) }
-    @objc private func previewTapped() { delegate?.controlPanelDidTapPreview(self) }
+    @objc private func toggleScanTapped() {
+        delegate?.controlPanelDidTapToggleScan(self)
+    }
     
-    @objc private func exportTapped() {
-        let alert = UIAlertController(title: "Export Options",
-                                    message: "Choose export format",
-                                    preferredStyle: .actionSheet)
-        
-        alert.addAction(UIAlertAction(title: "JSON", style: .default) { _ in
-            self.delegate?.controlPanel(self, didRequestExportAs: .json)
-        })
-        
-        alert.addAction(UIAlertAction(title: "PLY", style: .default) { _ in
-            self.delegate?.controlPanel(self, didRequestExportAs: .ply)
-        })
-        
-        alert.addAction(UIAlertAction(title: "ZIP", style: .default) { _ in
-            self.delegate?.controlPanel(self, didRequestExportAs: .zip)  // ✅ ZIP option
-        })
-        
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        
-        if let vc = parentViewController {
-            alert.popoverPresentationController?.sourceView = exportButton
-            alert.popoverPresentationController?.sourceRect = exportButton.bounds
-            vc.present(alert, animated: true)
-        }
+    @objc private func restartTapped() {
+        delegate?.controlPanelDidTapRestart(self)
     }
     
     func updateStatus(_ text: String) {
@@ -2163,11 +1796,9 @@ class ControlPanel: UIStackView {
     
     func updateUIForScanningState(isScanning: Bool, hasMeshes: Bool) {
         DispatchQueue.main.async {
-            self.startButton.isHidden = isScanning || hasMeshes
-            self.stopButton.isHidden = !isScanning
-            self.restartButton.isHidden = !hasMeshes
-            self.previewButton.isHidden = !hasMeshes
-            self.exportButton.isHidden = !hasMeshes
+            self.toggleScanButton.setTitle(isScanning ? "Stop" : "Start", for: .normal)
+            self.toggleScanButton.backgroundColor = isScanning ? UIColor.systemRed.withAlphaComponent(0.8) : UIColor.systemGreen.withAlphaComponent(0.8)
+            self.restartButton.isHidden = !hasMeshes || isScanning
         }
     }
 }
@@ -2201,32 +1832,6 @@ class LocationManager: NSObject, CLLocationManagerDelegate {
         latestLocation = locations.last
     }
 }
-
-
-extension FileManager {
-    func zipItem(at sourceURL: URL, to destinationURL: URL) throws {
-        let coordinator = NSFileCoordinator()
-        var coordinationError: NSError?
-        var success = false
-        
-        coordinator.coordinate(readingItemAt: sourceURL, options: [.forUploading], error: &coordinationError) { (zipURL) in
-            do {
-                if fileExists(atPath: destinationURL.path) {
-                    try removeItem(at: destinationURL)
-                }
-                try moveItem(at: zipURL, to: destinationURL)
-                success = true
-            } catch let moveError {
-                os_log("ZIP operation failed: %@", log: OSLog.default, type: .error, moveError.localizedDescription)
-            }
-        }
-        
-        if !success, let error = coordinationError {
-            throw error
-        }
-    }
-}
-
 
 struct CapturedMesh: Codable {
     var vertices: [SIMD3<Float>]
