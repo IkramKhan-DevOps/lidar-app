@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 class CustomBottomNavBar extends StatelessWidget {
   final int currentIndex;
-  final Function(int) onTap;
+  final ValueChanged<int> onTap;
 
   const CustomBottomNavBar({
     super.key,
@@ -12,33 +12,51 @@ class CustomBottomNavBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: 75,
-      padding: const EdgeInsets.symmetric(horizontal: 40),
-      decoration: const BoxDecoration(
-        color: Colors.black,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black54,
-            blurRadius: 10,
-            offset: Offset(0, -2),
+    return BottomAppBar(
+      color: Colors.black87,
+      elevation: 12,
+      child: Container(
+        height: 70,
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Colors.black54, Colors.black87],
           ),
-        ],
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          _buildNavItem(
-            icon: Icons.folder_open,
-            label: 'RECORD',
-            index: 0,
-          ),
-          _buildNavItem(
-            icon: Icons.menu,
-            label: '',
-            index: 2,
-          ),
-        ],
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black26,
+              blurRadius: 8,
+              offset: Offset(0, -2),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _buildNavItem(
+              icon: Icons.folder,
+              label: "LIBRARY",
+              index: 0,
+              isSelected: currentIndex == 0,
+              onTap: onTap,
+            ),
+            _buildNavItem(
+              icon: Icons.add,
+              label: "",
+              index: 1,
+              isSelected: currentIndex == 1,
+              onTap: onTap,
+            ),
+            _buildNavItem(
+              icon: Icons.menu,
+              label: "",
+              index: 2,
+              isSelected: currentIndex == 2,
+              onTap: onTap,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -47,25 +65,40 @@ class CustomBottomNavBar extends StatelessWidget {
     required IconData icon,
     required String label,
     required int index,
+    required bool isSelected,
+    required ValueChanged<int> onTap,
   }) {
-    final isSelected = currentIndex == index;
     return GestureDetector(
       onTap: () => onTap(index),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, color: Colors.white, size: 26),
-          if (label.isNotEmpty)
-            Text(
-              label,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
+      behavior: HitTestBehavior.translucent,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: 54), // Adjust to fit within 70px height
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                icon,
+                color: isSelected ? Colors.white : Colors.white70,
+                size: 28,
               ),
-            ),
-        ],
+              if (label.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    label,
+                    style: TextStyle(
+                      color: isSelected ? Colors.white : Colors.white70,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 12,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }

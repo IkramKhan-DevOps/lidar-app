@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:platform_channel_swift_demo/screens/auth/login_screen.dart';
 import 'package:platform_channel_swift_demo/screens/home_screen.dart';
+import 'package:platform_channel_swift_demo/screens/model_detail_screen.dart';
 
 void main() {
   runApp(const ModelCraftApp());
@@ -20,7 +22,8 @@ class ModelCraftApp extends StatelessWidget {
         brightness: Brightness.dark,
         useMaterial3: true,
       ),
-      home: const HomeScreen(),
+      home: const LoginScreen(),
+      //home: ModelDetailScreen(),
     );
   }
 }

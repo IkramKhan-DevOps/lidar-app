@@ -1,6 +1,6 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
-import '../main.dart';
+import 'package:flutter/services.dart';
 
 class ScanScreen extends StatefulWidget {
   final bool autoStartScan;
@@ -13,20 +13,41 @@ class ScanScreen extends StatefulWidget {
 
 class _ScanScreenState extends State<ScanScreen> {
   String display = "Ready to scan your world";
+  static const platform = MethodChannel('com.demo.channel/message');
 
   @override
   void initState() {
     super.initState();
+    // Set up method channel listener
+    platform.setMethodCallHandler(_handleMethodCall);
     if (widget.autoStartScan) {
       _startScan();
     }
   }
 
+  Future<void> _handleMethodCall(MethodCall call) async {
+    if (call.method == 'closeARModule') {
+      setState(() {
+        display = "Scan closed. Ready to start a new scan.";
+      });
+      // Optionally pop the ScanScreen if it's not the root screen
+      if (Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+    }
+  }
+
   Future<void> _startScan() async {
-    final String msg = await ModelCraftApp.platform.invokeMethod('startScan');
-    setState(() {
-      display = msg;
-    });
+    try {
+      final String msg = await platform.invokeMethod('startScan');
+      setState(() {
+        display = msg;
+      });
+    } on PlatformException catch (e) {
+      setState(() {
+        display = "Error starting scan: ${e.message}";
+      });
+    }
   }
 
   @override
