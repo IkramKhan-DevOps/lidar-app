@@ -1,4 +1,5 @@
 import 'dart:ui';
+import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_notch_bottom_bar.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:platform_channel_swift_demo/screens/dashboard_screen.dart';
@@ -13,84 +14,70 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  int _currentIndex = 0;
+  final _pageController = PageController(initialPage: 0);
+  final NotchBottomBarController _controller = NotchBottomBarController(index: 0);
 
-  final List<Widget> _screens = [
-    const DashboardScreen(),
-    const Placeholder(), // Placeholder for scan
-    const SettingsScreen(),
-  ];
+  @override
+  void dispose() {
+    _pageController.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final List<Widget> bottomBarPages = [
+      const DashboardScreen(),
+      const Placeholder(), // Placeholder for scan
+      const SettingsScreen(),
+    ];
+
     return Scaffold(
-      backgroundColor: Colors.black,
-      body: _screens[_currentIndex],
-      bottomNavigationBar: Padding(
-        padding: const EdgeInsets.all(12.0),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(25),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.05),
-                borderRadius: BorderRadius.circular(25),
-                border: Border.all(
-                  color: Colors.white.withOpacity(0.1),
-                ),
-              ),
-              child: BottomNavigationBar(
-                currentIndex: _currentIndex,
-                backgroundColor: Colors.transparent,
-                elevation: 0,
-                selectedItemColor: const Color(0xFF00AEEF),
-                unselectedItemColor: Colors.white70,
-                selectedLabelStyle: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 13,
-                  letterSpacing: 0.5,
-                ),
-                unselectedLabelStyle: const TextStyle(
-                  fontWeight: FontWeight.w500,
-                  fontSize: 12,
-                  letterSpacing: 0.5,
-                ),
-                type: BottomNavigationBarType.fixed,
-                onTap: (index) {
-                  if (index == 1) {
-                    Navigator.of(context).push(
-                      CupertinoPageRoute(
-                        builder: (_) => const ScanScreen(autoStartScan: true),
-                      ),
-                    );
-                  } else {
-                    setState(() {
-                      _currentIndex = index;
-                    });
-                  }
-                },
-                items: const [
-                  BottomNavigationBarItem(
-                    icon: Icon(Icons.folder_outlined),
-                    activeIcon: Icon(Icons.folder),
-                    label: 'Library',
-                  ),
-                  BottomNavigationBarItem(
-                    icon: Icon(Icons.camera_alt_outlined),
-                    activeIcon: Icon(Icons.camera_alt),
-                    label: 'Scan',
-                  ),
-                  BottomNavigationBarItem(
-                    icon: Icon(Icons.settings_outlined),
-                    activeIcon: Icon(Icons.settings),
-                    label: 'Settings',
-                  ),
-                ],
-              ),
-            ),
+      backgroundColor: Colors.grey[900],
+      body: PageView(
+        controller: _pageController,
+        physics: const NeverScrollableScrollPhysics(),
+        children: List.generate(bottomBarPages.length, (index) => bottomBarPages[index]),
+      ),
+      bottomNavigationBar: AnimatedNotchBottomBar(
+        bottomBarWidth: MediaQuery.of(context).size.width,
+        notchColor: Color(0xFF00AEEF),
+        notchBottomBarController: _controller,
+        color: Colors.black, // Match your original BNB background
+        showLabel: false, // Hide labels initially
+        bottomBarItems: [
+          BottomBarItem(
+            inActiveItem: Icon(Icons.folder_outlined, color: Colors.white70),
+            activeItem: Icon(Icons.folder_outlined, color: Colors.white70),
+            itemLabel: 'Library',
           ),
-        ),
+          BottomBarItem(
+            inActiveItem: Icon(Icons.camera_alt_outlined, color: Colors.white70),
+            activeItem: Icon(Icons.camera_alt_outlined, color: Colors.white70),
+            itemLabel: 'Scan',
+          ),
+          BottomBarItem(
+            inActiveItem: Icon(Icons.settings_outlined, color: Colors.white70),
+            activeItem: Icon(Icons.settings_outlined, color: Colors.white70),
+            itemLabel: 'Settings',
+          ),
+        ],
+        onTap: (index) {
+          if (index == 1) {
+            Navigator.of(context).push(
+              CupertinoPageRoute(
+                builder: (_) => const ScanScreen(autoStartScan: true),
+              ),
+            );
+          } else {
+            _pageController.jumpToPage(index);
+            setState(() {});
+          }
+        },
+        showShadow: true,
+        elevation: 0,
+        kBottomRadius: 0,
+        kIconSize: 24.0,
       ),
     );
   }

@@ -15,21 +15,28 @@ struct ScanMetadata: Codable {
     var timestamp: Date
     var scanID: String
     var coordinates: [[Double]]?
-    var locationName: String? // Official location name or address
-    var modelSizeBytes: Int64? // Size of USDZ model or raw data in bytes
-    var imageCount: Int // Number of actual captured images
+    var coordinateTimestamps: [Double]? // New field for timestamps of coordinates
+    var locationName: String?
+    var modelSizeBytes: Int64?
+    var imageCount: Int
+    var status: String
+    var snapshotPath: String?
+    var durationSeconds: Double?
 
     enum CodingKeys: String, CodingKey {
         case name
         case timestamp
         case scanID = "scan_id"
         case coordinates
+        case coordinateTimestamps = "coordinate_timestamps" // New coding key
         case locationName = "location_name"
         case modelSizeBytes = "model_size_bytes"
         case imageCount = "image_count"
+        case status
+        case snapshotPath = "snapshot_path"
+        case durationSeconds = "duration_seconds"
     }
 }
-
 
 @available(iOS 13.0.0, *)
 class ScanLocalStorage {
@@ -91,7 +98,7 @@ class ScanLocalStorage {
         }
     }
 
-    func finalizeScanFolder(tempFolderURL: URL, name: String?, coordinates: [[Double]]? = nil, imageCount: Int) async -> (url: URL?, metadata: ScanMetadata?) {
+    func finalizeScanFolder(tempFolderURL: URL, name: String?, coordinates: [[Double]]? = nil, coordinateTimestamps: [Double]? = nil, imageCount: Int, durationSeconds: Double? = nil) async -> (url: URL?, metadata: ScanMetadata?) {
         let scanID = UUID().uuidString
         let timestamp = Date()
         let dateFormatter = DateFormatter()
@@ -153,9 +160,13 @@ class ScanLocalStorage {
                 timestamp: timestamp,
                 scanID: scanID,
                 coordinates: coordinates,
+                coordinateTimestamps: coordinateTimestamps, // Include timestamps
                 locationName: locationName,
                 modelSizeBytes: modelSizeBytes,
-                imageCount: imageCount
+                imageCount: imageCount,
+                status: "pending",
+                snapshotPath: nil,
+                durationSeconds: durationSeconds
             )
             var metadataURL = finalFolderURL.appendingPathComponent("metadata.json")
             let encoder = JSONEncoder()
@@ -200,6 +211,34 @@ class ScanLocalStorage {
             return true
         } catch {
             os_log("Failed to update scan name: %@", log: OSLog.default, type: .error, error.localizedDescription)
+            return false
+        }
+    }
+
+    func updateScanStatus(_ status: String, for scanFolderURL: URL) -> Bool {
+        var metadataURL = scanFolderURL.appendingPathComponent("metadata.json")
+        do {
+            let data = try Data(contentsOf: metadataURL)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            var metadata = try decoder.decode(ScanMetadata.self, from: data)
+
+            metadata.status = status
+
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let updatedData = try encoder.encode(metadata)
+            try updatedData.write(to: metadataURL)
+
+            var resourceValues = URLResourceValues()
+            resourceValues.isExcludedFromBackup = true
+            try metadataURL.setResourceValues(resourceValues)
+
+            os_log("Updated scan status to '%@' for: %@", log: OSLog.default, type: .info, status, scanFolderURL.path)
+            return true
+        } catch {
+            os_log("Failed to update scan status: %@", log: OSLog.default, type: .error, error.localizedDescription)
             return false
         }
     }
@@ -253,6 +292,7 @@ class ScanLocalStorage {
                 var usdzSizeBytes: Int64?
                 let zipURL = folderURL.appendingPathComponent("input_data.zip")
                 let usdzURL = folderURL.appendingPathComponent("model.usdz")
+                let snapshotURL = folderURL.appendingPathComponent("snapshot.png")
                 if fileManager.fileExists(atPath: zipURL.path) {
                     if let attributes = try? fileManager.attributesOfItem(atPath: zipURL.path),
                        let size = attributes[.size] as? Int64 {
@@ -274,6 +314,9 @@ class ScanLocalStorage {
                         decoder.dateDecodingStrategy = .iso8601
                         metadata = try decoder.decode(ScanMetadata.self, from: data)
                         metadata?.modelSizeBytes = totalSizeBytes
+                        if fileManager.fileExists(atPath: snapshotURL.path) {
+                            metadata?.snapshotPath = "snapshot.png"
+                        }
                     } catch {
                         os_log("Failed to read metadata for %@: %@", log: OSLog.default, type: .error, folderURL.path, error.localizedDescription)
                         metadata = ScanMetadata(
@@ -281,9 +324,13 @@ class ScanLocalStorage {
                             timestamp: (try? folderURL.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date(),
                             scanID: folderURL.lastPathComponent,
                             coordinates: nil,
+                            coordinateTimestamps: nil, // Initialize new field
                             locationName: nil,
                             modelSizeBytes: totalSizeBytes,
-                            imageCount: 0
+                            imageCount: 0,
+                            status: "pending",
+                            snapshotPath: fileManager.fileExists(atPath: snapshotURL.path) ? "snapshot.png" : nil,
+                            durationSeconds: nil
                         )
                     }
                 } else {
@@ -292,9 +339,13 @@ class ScanLocalStorage {
                         timestamp: (try? folderURL.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date(),
                         scanID: folderURL.lastPathComponent,
                         coordinates: nil,
+                        coordinateTimestamps: nil, // Initialize new field
                         locationName: nil,
                         modelSizeBytes: totalSizeBytes,
-                        imageCount: 0
+                        imageCount: 0,
+                        status: "pending",
+                        snapshotPath: fileManager.fileExists(atPath: snapshotURL.path) ? "snapshot.png" : nil,
+                        durationSeconds: nil
                     )
                 }
 
@@ -332,28 +383,24 @@ class ScanLocalStorage {
         let zipURL = folderURL.appendingPathComponent("input_data.zip")
 
         do {
-            // Create temporary directory if it doesn't exist
             try fileManager.createDirectory(at: tempDirURL, withIntermediateDirectories: true, attributes: nil)
             var resourceValues = URLResourceValues()
             resourceValues.isExcludedFromBackup = true
             try tempDirURL.setResourceValues(resourceValues)
 
-            // Check if zip file exists
             guard fileManager.fileExists(atPath: zipURL.path) else {
                 os_log("No input_data.zip found in folder: %@", log: OSLog.default, type: .error, folderPath)
-                try? fileManager.removeItem(at: tempDirURL) // Clean up
+                try? fileManager.removeItem(at: tempDirURL)
                 return nil
             }
 
-            // Extract ZIP to temporary directory
             let success = SSZipArchive.unzipFile(atPath: zipURL.path, toDestination: tempDirURL.path)
             guard success else {
                 os_log("Failed to unzip file at: %@", log: OSLog.default, type: .error, zipURL.path)
-                try? fileManager.removeItem(at: tempDirURL) // Clean up
+                try? fileManager.removeItem(at: tempDirURL)
                 return nil
             }
 
-            // Filter for image_*.jpg files in the images folder
             let imagesDirURL = tempDirURL.appendingPathComponent("images")
             let contents = try fileManager.contentsOfDirectory(at: imagesDirURL, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
             let imagePaths = contents
@@ -364,7 +411,7 @@ class ScanLocalStorage {
             return imagePaths.isEmpty ? nil : imagePaths
         } catch {
             os_log("Failed to extract images from zip for %@: %@", log: OSLog.default, type: .error, folderPath, error.localizedDescription)
-            try? fileManager.removeItem(at: tempDirURL) // Clean up on failure
+            try? fileManager.removeItem(at: tempDirURL)
             return nil
         }
     }
@@ -375,8 +422,6 @@ class ScanLocalStorage {
             os_log("Folder not found: %@", log: OSLog.default, type: .error, folderPath)
             return nil
         }
-        // Placeholder: Return success message for now
-        // Actual implementation will be handled in AppDelegate with UIDocumentPickerViewController
         os_log("Folder access requested: %@", log: OSLog.default, type: .info, folderPath)
         return "Folder access requested: \(folderPath)"
     }
@@ -391,6 +436,7 @@ protocol ARScannerDelegate: AnyObject {
     func arScanner(_ scanner: ARScanner, showAlertWithTitle title: String, message: String)
     func arScanner(_ scanner: ARScanner, didCaptureDebugImage image: UIImage)
     func arScanner(_ scanner: ARScanner, promptForScanName completion: @escaping (String?) -> Void)
+    func arScanner(_ scanner: ARScanner, didUpdateDuration duration: Double)
 }
 
 @available(iOS 13.4, *)
@@ -408,10 +454,15 @@ class ARScanner: NSObject {
     private var cameraPositions: [simd_float3] = []
     private var lastCameraPosition: simd_float3?
     private var coordinates: [[Double]] = []
+    private var coordinateTimestamps: [Double] = [] // New array for timestamps
     private let locationManager = LocationManager()
     var currentScanFolderURL: URL?
     private var imageCount: Int = 0
-    private var isProcessingFrames: Bool = true // Control frame processing
+    private var isProcessingFrames: Bool = true
+    private var lastCompletionPercentage: Int?
+    private var scanStartTime: Date?
+    private var scanDuration: Double = 0.0
+    private var lastCoordinateCaptureTime: TimeInterval = 0 // New property for time-based capture
 
     var view: ARSCNView { return arView }
     var isScanning: Bool = false
@@ -472,66 +523,74 @@ class ARScanner: NSObject {
 
         arView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
         isScanning = true
-        isProcessingFrames = true // Enable frame processing
+        isProcessingFrames = true
         coordinates.removeAll()
+        coordinateTimestamps.removeAll() // Clear timestamps
         imageCount = 0
+        lastCoordinateCaptureTime = 0 // Reset capture time
+        scanStartTime = Date()
+        scanDuration = 0.0
         updateStatus("Ready to scan! Move your device slowly to capture the scene.", isCritical: true)
+        updateDuration()
     }
 
     func stopScan() {
-            guard isScanning else { return }
-            isProcessingFrames = false
-            arView.session.pause()
-            isScanning = false
-            updateStatus("Scan paused. Preparing to save...", isCritical: true)
+        guard isScanning else { return }
+        isProcessingFrames = false
+        arView.session.pause()
+        isScanning = false
+        if let startTime = scanStartTime {
+            scanDuration = Date().timeIntervalSince(startTime)
+        }
+        updateStatus("Scan paused. Preparing to save...", isCritical: true)
 
-            delegate?.arScanner(self, promptForScanName: { [weak self] name in
-                guard let self = self, let tempFolderURL = self.currentScanFolderURL else { return }
+        delegate?.arScanner(self, promptForScanName: { [weak self] name in
+            guard let self = self, let tempFolderURL = self.currentScanFolderURL else { return }
 
-                // Use Task to handle async call
-                Task {
-                    do {
-                        let (finalFolderURL, metadata) = try await ScanLocalStorage.shared.finalizeScanFolder(
-                            tempFolderURL: tempFolderURL,
-                            name: name,
-                            coordinates: self.coordinates,
-                            imageCount: self.imageCount
-                        )
-                        guard let finalFolderURL = finalFolderURL, let metadata = metadata else {
-                            DispatchQueue.main.async {
-                                self.delegate?.arScanner(self, showAlertWithTitle: "Save Error",
-                                                        message: "Failed to finalize scan folder. Please try again.")
-                            }
-                            return
-                        }
-                        self.currentScanFolderURL = finalFolderURL
-
-                        do {
-                            let zipData = try self.exportDataAsZip()
-                            _ = ScanLocalStorage.shared.saveInputZip(zipData, to: finalFolderURL)
-                        } catch {
-                            os_log("Failed to save scan data: %@", log: OSLog.default, type: .error, error.localizedDescription)
-                            DispatchQueue.main.async {
-                                self.delegate?.arScanner(self, showAlertWithTitle: "Save Error",
-                                                        message: "Failed to save scan data. Please try again.")
-                            }
-                            return
-                        }
-
-                        DispatchQueue.main.async {
-                            self.delegate?.arScannerDidStopScanning(self)
-                        }
-                    } catch {
-                        os_log("Failed to finalize scan: %@", log: OSLog.default, type: .error, error.localizedDescription)
+            Task {
+                do {
+                    let (finalFolderURL, metadata) = try await ScanLocalStorage.shared.finalizeScanFolder(
+                        tempFolderURL: tempFolderURL,
+                        name: name,
+                        coordinates: self.coordinates,
+                        coordinateTimestamps: self.coordinateTimestamps, // Pass timestamps
+                        imageCount: self.imageCount,
+                        durationSeconds: self.scanDuration
+                    )
+                    guard let finalFolderURL = finalFolderURL, let metadata = metadata else {
                         DispatchQueue.main.async {
                             self.delegate?.arScanner(self, showAlertWithTitle: "Save Error",
-                                                    message: "Failed to finalize scan: \(error.localizedDescription)")
+                                                    message: "Failed to finalize scan folder. Please try again.")
                         }
+                        return
+                    }
+                    self.currentScanFolderURL = finalFolderURL
+
+                    do {
+                        let zipData = try self.exportDataAsZip()
+                        _ = ScanLocalStorage.shared.saveInputZip(zipData, to: finalFolderURL)
+                    } catch {
+                        os_log("Failed to save scan data: %@", log: OSLog.default, type: .error, error.localizedDescription)
+                        DispatchQueue.main.async {
+                            self.delegate?.arScanner(self, showAlertWithTitle: "Save Error",
+                                                    message: "Failed to save scan data. Please try again.")
+                        }
+                        return
+                    }
+
+                    DispatchQueue.main.async {
+                        self.delegate?.arScannerDidStopScanning(self)
+                    }
+                } catch {
+                    os_log("Failed to finalize scan: %@", log: OSLog.default, type: .error, error.localizedDescription)
+                    DispatchQueue.main.async {
+                        self.delegate?.arScanner(self, showAlertWithTitle: "Save Error",
+                                                message: "Failed to finalize scan: \(error.localizedDescription)")
                     }
                 }
-            })
-        }
-    
+            }
+        })
+    }
 
     func restartScan() {
         stopScan()
@@ -543,8 +602,12 @@ class ARScanner: NSObject {
         cameraPositions.removeAll()
         lastCameraPosition = nil
         coordinates.removeAll()
+        coordinateTimestamps.removeAll() // Clear timestamps
         imageCount = 0
         lastSignificantMeshUpdate = Date()
+        scanStartTime = nil
+        scanDuration = 0.0
+        lastCoordinateCaptureTime = 0 // Reset capture time
         if let tempFolderURL = currentScanFolderURL {
             try? FileManager.default.removeItem(at: tempFolderURL)
         }
@@ -618,7 +681,7 @@ class ARScanner: NSObject {
     }
 
     private func process(_ meshAnchor: ARMeshAnchor) {
-        guard isProcessingFrames else { return } // Skip processing if stopped
+        guard isProcessingFrames else { return }
 
         let geometry = meshAnchor.geometry
         let transform = meshAnchor.transform
@@ -808,7 +871,7 @@ class ARScanner: NSObject {
     }
 
     private func updateStatus(_ message: String, isCritical: Bool = false) {
-        guard isProcessingFrames else { return } // Avoid updates during save
+        guard isProcessingFrames else { return }
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             if self.shouldUpdateMessage(message, isCritical: isCritical) {
@@ -818,27 +881,32 @@ class ARScanner: NSObject {
         }
     }
 
-    // Add this property to ARScanner class
-        private var lastCompletionPercentage: Int?
-
-        // Replace provideProgressFeedback with this
-        private func provideProgressFeedback(count: Int) {
-            let coverage = estimateSceneCoverage()
-            let completionPercentage = Int(coverage * 100)
-            guard completionPercentage != lastCompletionPercentage else { return } // Skip if same percentage
-            lastCompletionPercentage = completionPercentage
-
-            let progressMessages = [
-                (25, "Nice start! Keep exploring the area."),
-                (50, "You're halfway done! Look for missed areas."),
-                (75, "Almost there! Check edges and corners."),
-                (100, "Scan complete! Review for any missed spots.")
-            ]
-
-            if let (percentage, message) = progressMessages.first(where: { $0.0 == completionPercentage }) {
-                updateStatus(message, isCritical: true)
-            }
+    private func updateDuration() {
+        guard isScanning, let startTime = scanStartTime else { return }
+        scanDuration = Date().timeIntervalSince(startTime)
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.delegate?.arScanner(self, didUpdateDuration: self.scanDuration)
         }
+    }
+
+    private func provideProgressFeedback(count: Int) {
+        let coverage = estimateSceneCoverage()
+        let completionPercentage = Int(coverage * 100)
+        guard completionPercentage != lastCompletionPercentage else { return }
+        lastCompletionPercentage = completionPercentage
+
+        let progressMessages = [
+            (25, "Nice start! Keep exploring the area."),
+            (50, "You're halfway done! Look for missed areas."),
+            (75, "Almost there! Check edges and corners."),
+            (100, "Scan complete! Review for any missed spots.")
+        ]
+
+        if let (percentage, message) = progressMessages.first(where: { $0.0 == completionPercentage }) {
+            updateStatus(message, isCritical: true)
+        }
+    }
 
     private func analyzeSurfaceFeatures(frame: ARFrame) {
         let featureCount = frame.rawFeaturePoints?.points.count ?? 0
@@ -951,17 +1019,12 @@ class ARScanner: NSObject {
             updateStatus("Your device is getting warm. Take a quick break to cool it down.", isCritical: true)
         }
     }
-
-    // MARK: - ScanCaptureManagerDelegate
-    func scanCaptureManager(_ manager: ScanCaptureManager, didCaptureImage count: Int) {
-        imageCount = count
-    }
 }
 
 @available(iOS 13.4, *)
 extension ARScanner: ARSessionDelegate, ARSCNViewDelegate {
     func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
-        guard isProcessingFrames else { return } // Skip processing if stopped
+        guard isProcessingFrames else { return }
         for anchor in anchors {
             if let meshAnchor = anchor as? ARMeshAnchor {
                 process(meshAnchor)
@@ -970,24 +1033,32 @@ extension ARScanner: ARSessionDelegate, ARSCNViewDelegate {
     }
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        guard isProcessingFrames else { return } // Skip processing if stopped
+        guard isProcessingFrames else { return }
         captureManager.tryCapture(frame: frame)
 
-        if let location = locationManager.latestLocation, location.horizontalAccuracy <= 10 {
-            let currentPosition = simd_float3(
-                frame.camera.transform.columns.3.x,
-                frame.camera.transform.columns.3.y,
-                frame.camera.transform.columns.3.z
-            )
-            if let lastPos = lastCameraPosition, simd_distance(currentPosition, lastPos) >= 0.1 {
-                coordinates.append([location.coordinate.latitude, location.coordinate.longitude])
-                lastCameraPosition = currentPosition
-            } else if lastCameraPosition == nil {
-                coordinates.append([location.coordinate.latitude, location.coordinate.longitude])
-                lastCameraPosition = currentPosition
+        // Capture coordinates every 2 seconds, up to 100 points
+        let currentTime = CACurrentMediaTime()
+        if coordinates.count < 100 && (lastCoordinateCaptureTime == 0 || currentTime - lastCoordinateCaptureTime >= 2.0) {
+            if let location = locationManager.latestLocation {
+                let accuracy = location.horizontalAccuracy
+                if accuracy <= 20 { // Relaxed accuracy threshold
+                    let latitude = location.coordinate.latitude
+                    let longitude = location.coordinate.longitude
+                    // Validate coordinates
+                    if (-90...90).contains(latitude) && (-180...180).contains(longitude) {
+                        coordinates.append([latitude, longitude])
+                        coordinateTimestamps.append(currentTime)
+                        lastCoordinateCaptureTime = currentTime
+                        os_log("Captured coordinate: [%f, %f] at time %f", log: OSLog.default, type: .info, latitude, longitude, currentTime)
+                    } else {
+                        updateStatus("Invalid GPS coordinates detected.", isCritical: false)
+                    }
+                } else {
+                    updateStatus("Poor GPS signal (accuracy: %fm). Coordinates may be less reliable.", isCritical: false)
+                }
+            } else {
+                updateStatus("No GPS signal available.", isCritical: false)
             }
-        } else {
-            updateStatus("Poor GPS signal. Coordinates may not be accurate.", isCritical: false)
         }
 
         if let lightEstimate = frame.lightEstimate?.ambientIntensity, lightEstimate < 100 {
@@ -1032,12 +1103,16 @@ extension ARScanner: ARSessionDelegate, ARSCNViewDelegate {
         provideTemporalGuidance()
         provideAngleGuidance(frame: frame)
         provideCoverageFeedback()
+        updateDuration()
     }
 }
 
-// MARK: - ScanCaptureManagerDelegate
 @available(iOS 13.4, *)
 extension ARScanner: ScanCaptureManagerDelegate {
+    func scanCaptureManager(_ manager: ScanCaptureManager, didCaptureImage count: Int) {
+        imageCount = count
+    }
+
     func scanCaptureManagerReachedStorageLimit(_ manager: ScanCaptureManager) {
         DispatchQueue.main.async {
             self.stopScan()
@@ -1045,7 +1120,7 @@ extension ARScanner: ScanCaptureManagerDelegate {
                                     message: "Storage is full! Clear some space or process your scan.")
         }
     }
-    
+
     func scanCaptureManager(_ manager: ScanCaptureManager, didUpdateStatus status: String) {
         updateStatus(status, isCritical: false)
     }
@@ -1333,9 +1408,14 @@ class ScanViewController: UIViewController {
     }
 }
 
-// MARK: - ARScannerDelegate
 @available(iOS 13.4, *)
 extension ScanViewController: ARScannerDelegate {
+    func arScanner(_ scanner: ARScanner, didUpdateDuration duration: Double) {
+        DispatchQueue.main.async {
+            self.controlPanel.updateDuration(duration)
+        }
+    }
+
     func arScanner(_ scanner: ARScanner, didUpdateStatus status: String) {
         DispatchQueue.main.async {
             self.controlPanel.updateStatus(status)
@@ -1353,7 +1433,7 @@ extension ScanViewController: ARScannerDelegate {
         DispatchQueue.main.async {
             self.activityIndicator?.startAnimating()
             self.controlPanel.updateUIForScanningState(isScanning: false,
-                                                     hasMeshes: !scanner.getCapturedMeshes().isEmpty)
+                                                      hasMeshes: !scanner.getCapturedMeshes().isEmpty)
             if !scanner.getCapturedMeshes().isEmpty {
                 if let folderURL = scanner.currentScanFolderURL {
                     let metadataURL = folderURL.appendingPathComponent("metadata.json")
@@ -1372,9 +1452,11 @@ extension ScanViewController: ARScannerDelegate {
                             "hasUSDZ": usdzURL != nil,
                             "timestamp": dateFormatter.string(from: metadata.timestamp),
                             "coordinates": metadata.coordinates ?? [],
+                            "coordinateTimestamps": metadata.coordinateTimestamps ?? [], // Include timestamps
                             "locationName": metadata.locationName ?? "",
                             "modelSizeBytes": metadata.modelSizeBytes ?? 0,
-                            "imageCount": metadata.imageCount
+                            "imageCount": metadata.imageCount,
+                            "durationSeconds": metadata.durationSeconds ?? 0.0
                         ]) { result in
                             if let error = result as? FlutterError {
                                 os_log("Failed to invoke scanComplete: %@", log: OSLog.default, type: .error, error.message ?? "Unknown error")
@@ -1404,6 +1486,7 @@ extension ScanViewController: ARScannerDelegate {
     }
 
     func arScanner(_ scanner: ARScanner, didCaptureDebugImage image: UIImage) {
+        // No action needed for debug image
     }
 
     func arScanner(_ scanner: ARScanner, promptForScanName completion: @escaping (String?) -> Void) {
@@ -1412,7 +1495,7 @@ extension ScanViewController: ARScannerDelegate {
             alert.addTextField { textField in
                 let dateFormatter = DateFormatter()
                 dateFormatter.dateFormat = "yyyy-MM-dd_HHmm"
-                textField.text = "Scan_\(dateFormatter.string(from: Date()))"
+                textField.text = ""
                 textField.placeholder = "Enter scan name"
             }
 
@@ -1458,10 +1541,12 @@ extension ScanViewController: ScanCaptureManagerDelegate {
 extension ScanViewController: ControlPanelDelegate {
     func controlPanelDidTapStart(_ controlPanel: ControlPanel) {
         arScanner.startScan()
+        generateHapticFeedback()
     }
 
     func controlPanelDidTapStop(_ controlPanel: ControlPanel) {
         arScanner.stopScan()
+        generateHapticFeedback()
     }
 }
 
@@ -1768,6 +1853,49 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         setupFlutterChannel()
         setupUI()
         setupScene()
+        captureAndSaveSnapshot() // Capture snapshot after setting up the scene
+    }
+
+    private func captureAndSaveSnapshot() {
+        guard let scanFolderURL = currentScanFolderURL else {
+            os_log("No scan folder URL to save snapshot", log: OSLog.default, type: .error)
+            return
+        }
+
+        // Capture snapshot from SCNView
+        let snapshot = sceneView.snapshot()
+        var snapshotURL = scanFolderURL.appendingPathComponent("snapshot.png")
+        
+        do {
+            // Save snapshot as PNG
+            if let data = snapshot.pngData() {
+                try data.write(to: snapshotURL)
+                var resourceValues = URLResourceValues()
+                resourceValues.isExcludedFromBackup = true
+                try snapshotURL.setResourceValues(resourceValues)
+                os_log("Saved snapshot to: %@", log: OSLog.default, type: .info, snapshotURL.path)
+                
+                // Update metadata with snapshot path
+                var metadataURL = scanFolderURL.appendingPathComponent("metadata.json")
+                if FileManager.default.fileExists(atPath: metadataURL.path) {
+                    let data = try Data(contentsOf: metadataURL)
+                    let decoder = JSONDecoder()
+                    decoder.dateDecodingStrategy = .iso8601
+                    var metadata = try decoder.decode(ScanMetadata.self, from: data)
+                    metadata.snapshotPath = "snapshot.png" // Store relative path
+                    
+                    let encoder = JSONEncoder()
+                    encoder.dateEncodingStrategy = .iso8601
+                    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                    let updatedData = try encoder.encode(metadata)
+                    try updatedData.write(to: metadataURL)
+                    try metadataURL.setResourceValues(resourceValues)
+                    os_log("Updated metadata with snapshot path", log: OSLog.default, type: .info)
+                }
+            }
+        } catch {
+            os_log("Failed to save snapshot: %@", log: OSLog.default, type: .error, error.localizedDescription)
+        }
     }
     
     private func setupFlutterChannel() {
@@ -1782,7 +1910,7 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         view.backgroundColor = .black
         view.addSubview(sceneView)
         view.addSubview(closeButton)
-        view.addSubview(backButton) // Added backButton to view hierarchy
+        view.addSubview(backButton)
         view.addSubview(processButton)
         view.addSubview(downloadButton)
         view.addSubview(shareButton)
@@ -1970,6 +2098,8 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                 self.loadingIndicator.stopAnimating()
                 self.statusLabel.text = ""
                 self.endBackgroundTask()
+                // Set status to pending on timeout
+                self.updateScanStatus(to: "pending", for: scanFolderURL)
             }
         }
         
@@ -1987,7 +2117,81 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                 self.statusLabel.text = String(format: "ZIP file created (%.2f MB). Processing may take ~%@ minutes...", zipSizeMB, estimatedTimeText)
             }
             
-            try processZipFile(at: zipURL)
+            channel?.invokeMethod("updateProcessingStatus", arguments: ["status": "processing"])
+            
+            processZipFile(at: zipURL) { [weak self] result in
+                guard let self = self else {
+                    self?.endBackgroundTask()
+                    return
+                }
+                
+                DispatchQueue.main.async {
+                    self.processButton.isEnabled = true
+                    self.processButton.setTitle("Process", for: .normal)
+                    self.loadingIndicator.stopAnimating()
+                }
+                
+                switch result {
+                case .success(let usdzURL, _):
+                    DispatchQueue.main.async {
+                        do {
+                            let scene = try SCNScene(url: usdzURL, options: nil)
+                            self.sceneView.scene = scene
+                            self.statusLabel.text = "Model loaded successfully."
+                            self.downloadedFileURL = usdzURL
+                            self.downloadButton.isHidden = false
+                            self.shareButton.isHidden = false
+                            os_log("✅ Successfully loaded and displayed USDZ model", log: OSLog.default, type: .info)
+                            self.channel?.invokeMethod("processingComplete", arguments: ["usdzPath": usdzURL.path]) { result in
+                                if let error = result as? FlutterError {
+                                    os_log("Failed to invoke processingComplete: %@", log: OSLog.default, type: .error, error.message ?? "Unknown error")
+                                }
+                            }
+                            // Update scan status to "uploaded"
+                            let success = ScanLocalStorage.shared.updateScanStatus("uploaded", for: scanFolderURL)
+                            if !success {
+                                os_log("⚠️ Failed to update scan status to uploaded", log: OSLog.default, type: .error)
+                            }
+                            self.endBackgroundTask()
+                        } catch {
+                            os_log("❌ Failed to load USDZ model with SceneKit: %@", log: OSLog.default, type: .error, error.localizedDescription)
+                            self.downloadedFileURL = usdzURL
+                            self.downloadButton.isHidden = false
+                            self.shareButton.isHidden = false
+                            let previewController = QLPreviewController()
+                            previewController.dataSource = self
+                            self.present(previewController, animated: true) {
+                                self.statusLabel.text = "Model loaded in Quick Look."
+                                os_log("✅ Loaded USDZ model in QLPreviewController", log: OSLog.default, type: .info)
+                                self.channel?.invokeMethod("processingComplete", arguments: ["usdzPath": usdzURL.path]) { result in
+                                    if let error = result as? FlutterError {
+                                        os_log("Failed to invoke processingComplete: %@", log: OSLog.default, type: .error, error.message ?? "Unknown error")
+                                    }
+                                }
+                                // Update scan status to "uploaded"
+                                let success = ScanLocalStorage.shared.updateScanStatus("uploaded", for: scanFolderURL)
+                                if !success {
+                                    os_log("⚠️ Failed to update scan status to uploaded", log: OSLog.default, type: .error)
+                                }
+                                self.endBackgroundTask()
+                            }
+                        }
+                    }
+                case .failure(let error, let modelUrl):
+                    DispatchQueue.main.async {
+                        self.showErrorAlertWithLink(message: error.message ?? "Unknown error")
+                        self.statusLabel.text = "Processing failed."
+                        // Update scan status based on error type
+                        let isServerError = ["API_REQUEST_FAILED", "API_STATUS_ERROR", "INVALID_MODEL_URL", "PARSE_FAILED"].contains(error.code)
+                        let newStatus = isServerError ? "failed" : "pending"
+                        let success = ScanLocalStorage.shared.updateScanStatus(newStatus, for: scanFolderURL)
+                        if !success {
+                            os_log("⚠️ Failed to update scan status to %@", log: OSLog.default, type: .error, newStatus)
+                        }
+                        self.endBackgroundTask()
+                    }
+                }
+            }
         } catch {
             os_log("❌ Failed to process: %@", log: OSLog.default, type: .error, error.localizedDescription)
             DispatchQueue.main.async {
@@ -1997,13 +2201,49 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                 self.loadingIndicator.stopAnimating()
                 self.statusLabel.text = ""
                 self.endBackgroundTask()
+                // Set status to pending for local errors
+                if let scanFolderURL = self.currentScanFolderURL {
+                    let success = ScanLocalStorage.shared.updateScanStatus("pending", for: scanFolderURL)
+                    if !success {
+                        os_log("⚠️ Failed to update scan status to pending", log: OSLog.default, type: .error)
+                    }
+                }
             }
         }
     }
     
-    private func processZipFile(at zipURL: URL) throws {
+    enum ProcessingResult {
+        case success(URL, Int64)
+        case failure(FlutterError, URL?)
+    }
+    
+    func processZipFile(at zipURL: URL, completion: @escaping (ProcessingResult) -> Void) {
+        guard let scanFolderURL = currentScanFolderURL else {
+            completion(.failure(FlutterError(
+                code: "NO_SCAN_FOLDER",
+                message: "No scan folder available for processing.",
+                details: nil
+            ), nil))
+            return
+        }
+        
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: zipURL.path) else {
+            completion(.failure(FlutterError(
+                code: "FILE_NOT_FOUND",
+                message: "ZIP file not found at \(zipURL.path)",
+                details: nil
+            ), nil))
+            return
+        }
+        
         guard let zipData = try? Data(contentsOf: zipURL) else {
-            throw NSError(domain: "FileError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to read ZIP file"])
+            completion(.failure(FlutterError(
+                code: "FILE_READ_ERROR",
+                message: "Failed to read ZIP file",
+                details: nil
+            ), nil))
+            return
         }
         
         let configuration = URLSessionConfiguration.default
@@ -2016,46 +2256,46 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         request.setValue("application/zip", forHTTPHeaderField: "Content-Type")
         request.httpBody = zipData
         
+        channel?.invokeMethod("updateProcessingStatus", arguments: ["status": "uploading"])
+        
         let task = session.dataTask(with: request) { [weak self] data, response, error in
             guard let self = self else {
-                self?.endBackgroundTask()
+                completion(.failure(FlutterError(
+                    code: "CONTROLLER_DEALLOCATED",
+                    message: "ModelViewController deallocated during processing",
+                    details: nil
+                ), nil))
                 return
-            }
-            
-            DispatchQueue.main.async {
-                self.processButton.isEnabled = true
-                self.processButton.setTitle("Process", for: .normal)
-                self.loadingIndicator.stopAnimating()
             }
             
             if let error = error {
                 os_log("❌ API request failed: %@", log: OSLog.default, type: .error, error.localizedDescription)
-                DispatchQueue.main.async {
-                    self.showErrorAlertWithLink(message: "API request failed: \(error.localizedDescription)")
-                    self.statusLabel.text = "Processing failed."
-                    self.endBackgroundTask()
-                }
+                completion(.failure(FlutterError(
+                    code: "API_REQUEST_FAILED",
+                    message: "API request failed: \(error.localizedDescription)",
+                    details: nil
+                ), nil))
                 return
             }
             
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
                 let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
                 os_log("❌ API returned non-200 status: %d", log: OSLog.default, type: .error, statusCode)
-                DispatchQueue.main.async {
-                    self.showErrorAlertWithLink(message: "API returned status code: \(statusCode)")
-                    self.statusLabel.text = "Processing failed."
-                    self.endBackgroundTask()
-                }
+                completion(.failure(FlutterError(
+                    code: "API_STATUS_ERROR",
+                    message: "API returned status code: \(statusCode)",
+                    details: nil
+                ), nil))
                 return
             }
             
             guard let data = data else {
                 os_log("❌ No data received from API", log: OSLog.default, type: .error)
-                DispatchQueue.main.async {
-                    self.showErrorAlertWithLink(message: "No data received from API")
-                    self.statusLabel.text = "Processing failed."
-                    self.endBackgroundTask()
-                }
+                completion(.failure(FlutterError(
+                    code: "NO_DATA",
+                    message: "No data received from API",
+                    details: nil
+                ), nil))
                 return
             }
             
@@ -2064,38 +2304,29 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                 guard let modelUrlString = json?["modelUrl"] as? String,
                       let modelUrl = URL(string: modelUrlString) else {
                     os_log("❌ Invalid model URL in response", log: OSLog.default, type: .error)
-                    DispatchQueue.main.async {
-                        self.showErrorAlertWithLink(message: "Invalid model URL in response")
-                        self.statusLabel.text = "Processing failed."
-                        self.endBackgroundTask()
-                    }
+                    completion(.failure(FlutterError(
+                        code: "INVALID_MODEL_URL",
+                        message: "Invalid model URL in response",
+                        details: nil
+                    ), nil))
                     return
                 }
                 
                 self.modelUrl = modelUrl
-                self.downloadAndDisplayModel(from: modelUrl)
+                self.downloadAndDisplayModel(from: modelUrl, scanFolderURL: scanFolderURL, completion: completion)
             } catch {
                 os_log("❌ Failed to parse API response: %@", log: OSLog.default, type: .error, error.localizedDescription)
-                DispatchQueue.main.async {
-                    self.showErrorAlertWithLink(message: "Failed to parse API response: \(error.localizedDescription)")
-                    self.statusLabel.text = "Processing failed."
-                    self.endBackgroundTask()
-                }
+                completion(.failure(FlutterError(
+                    code: "PARSE_FAILED",
+                    message: "Failed to parse API response: \(error.localizedDescription)",
+                    details: nil
+                ), nil))
             }
         }
         task.resume()
     }
     
-    private func downloadAndDisplayModel(from modelUrl: URL) {
-        guard let scanFolderURL = currentScanFolderURL else {
-            DispatchQueue.main.async {
-                self.showErrorAlert(message: "No scan folder available for saving model.")
-                self.statusLabel.text = "Model download failed."
-                self.endBackgroundTask()
-            }
-            return
-        }
-        
+    private func downloadAndDisplayModel(from modelUrl: URL, scanFolderURL: URL, completion: @escaping (ProcessingResult) -> Void) {
         DispatchQueue.main.async {
             self.statusLabel.text = "Downloading model..."
             self.loadingIndicator.startAnimating()
@@ -2105,9 +2336,15 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         configuration.timeoutIntervalForRequest = 600
         let session = URLSession(configuration: configuration)
         
+        channel?.invokeMethod("updateProcessingStatus", arguments: ["status": "downloading"])
+        
         let task = session.downloadTask(with: modelUrl) { [weak self] tempURL, response, error in
             guard let self = self else {
-                self?.endBackgroundTask()
+                completion(.failure(FlutterError(
+                    code: "CONTROLLER_DEALLOCATED",
+                    message: "ModelViewController deallocated during download",
+                    details: nil
+                ), modelUrl))
                 return
             }
             
@@ -2117,32 +2354,32 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
             
             if let error = error {
                 os_log("❌ Failed to download model: %@", log: OSLog.default, type: .error, error.localizedDescription)
-                DispatchQueue.main.async {
-                    self.showErrorAlertWithLink(message: "Failed to download model: \(error.localizedDescription)")
-                    self.statusLabel.text = "Model download failed."
-                    self.endBackgroundTask()
-                }
+                completion(.failure(FlutterError(
+                    code: "DOWNLOAD_FAILED",
+                    message: "Failed to download model: \(error.localizedDescription)",
+                    details: ["modelUrl": modelUrl.absoluteString]
+                ), modelUrl))
                 return
             }
             
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
                 let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
                 os_log("❌ Model download returned non-200 status: %d", log: OSLog.default, type: .error, statusCode)
-                DispatchQueue.main.async {
-                    self.showErrorAlertWithLink(message: "Model download failed with status: \(statusCode)")
-                    self.statusLabel.text = "Model download failed."
-                    self.endBackgroundTask()
-                }
+                completion(.failure(FlutterError(
+                    code: "DOWNLOAD_STATUS_ERROR",
+                    message: "Model download failed with status: \(statusCode)",
+                    details: ["modelUrl": modelUrl.absoluteString]
+                ), modelUrl))
                 return
             }
             
             guard let tempURL = tempURL else {
                 os_log("❌ No file URL for downloaded model", log: OSLog.default, type: .error)
-                DispatchQueue.main.async {
-                    self.showErrorAlertWithLink(message: "No file URL for downloaded model")
-                    self.statusLabel.text = "Model download failed."
-                    self.endBackgroundTask()
-                }
+                completion(.failure(FlutterError(
+                    code: "NO_FILE_URL",
+                    message: "No file URL for downloaded model",
+                    details: ["modelUrl": modelUrl.absoluteString]
+                ), modelUrl))
                 return
             }
             
@@ -2155,57 +2392,100 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                 try usdzURL.setResourceValues(resourceValues)
                 
                 if try self.validateUSDZFile(at: usdzURL) {
-                    DispatchQueue.main.async {
-                        do {
-                            let scene = try SCNScene(url: usdzURL, options: nil)
-                            self.sceneView.scene = scene
+                    let zipAttributes = try fileManager.attributesOfItem(atPath: scanFolderURL.appendingPathComponent("input_data.zip").path)
+                    let zipSize = zipAttributes[.size] as? Int64 ?? 0
+                    let usdzAttributes = try fileManager.attributesOfItem(atPath: usdzURL.path)
+                    let usdzSize = usdzAttributes[.size] as? Int64 ?? 0
+                    let totalSize = zipSize + usdzSize
+                    
+                    // Update metadata with model size and snapshot path
+                    var metadataURL = scanFolderURL.appendingPathComponent("metadata.json")
+                    if fileManager.fileExists(atPath: metadataURL.path) {
+                        let data = try Data(contentsOf: metadataURL)
+                        let decoder = JSONDecoder()
+                        decoder.dateDecodingStrategy = .iso8601
+                        var metadata = try decoder.decode(ScanMetadata.self, from: data)
+                        metadata.modelSizeBytes = totalSize
+                        metadata.status = "uploaded"
+                        metadata.snapshotPath = "snapshot.png" // Ensure snapshot path is set
+                        
+                        let encoder = JSONEncoder()
+                        encoder.dateEncodingStrategy = .iso8601
+                        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                        let updatedData = try encoder.encode(metadata)
+                        try updatedData.write(to: metadataURL)
+                        try metadataURL.setResourceValues(resourceValues)
+                    }
+                    
+                    // Try loading in SCNView first
+                    do {
+                        let scene = try SCNScene(url: usdzURL, options: nil)
+                        self.sceneView.scene = scene
+                        // Capture new snapshot after loading USDZ
+                        let snapshot = self.sceneView.snapshot()
+                        var snapshotURL = scanFolderURL.appendingPathComponent("snapshot.png")
+                        if let data = snapshot.pngData() {
+                            try data.write(to: snapshotURL)
+                            try snapshotURL.setResourceValues(resourceValues)
+                            os_log("Replaced snapshot with USDZ render: %@", log: OSLog.default, type: .info, snapshotURL.path)
+                        }
+                        
+                        DispatchQueue.main.async {
                             self.statusLabel.text = "Model loaded successfully."
                             self.downloadedFileURL = usdzURL
                             self.downloadButton.isHidden = false
                             self.shareButton.isHidden = false
-                            os_log("✅ Successfully loaded and displayed USDZ model", log: OSLog.default, type: .info)
-                            self.endBackgroundTask()
                             self.channel?.invokeMethod("processingComplete", arguments: ["usdzPath": usdzURL.path]) { result in
                                 if let error = result as? FlutterError {
                                     os_log("Failed to invoke processingComplete: %@", log: OSLog.default, type: .error, error.message ?? "Unknown error")
                                 }
                             }
-                        } catch {
-                            os_log("❌ Failed to load USDZ model with SceneKit: %@", log: OSLog.default, type: .error, error.localizedDescription)
+                            completion(.success(usdzURL, totalSize))
+                        }
+                    } catch {
+                        os_log("Failed to load USDZ in SCNView, falling back to QLPreview: %@", log: OSLog.default, type: .error, error.localizedDescription)
+                        let previewController = QLPreviewController()
+                        previewController.dataSource = self
+                        self.present(previewController, animated: true) {
+                            // Capture snapshot from SCNView (since QLPreviewController doesn’t provide direct snapshot API)
+                            // This captures the last SCNView state; alternatively, we rely on the pre-processed snapshot
+                            let snapshot = self.sceneView.snapshot()
+                            var snapshotURL = scanFolderURL.appendingPathComponent("snapshot.png")
+                            if let data = snapshot.pngData() {
+                                try? data.write(to: snapshotURL)
+                                try? snapshotURL.setResourceValues(resourceValues)
+                                os_log("Replaced snapshot for QLPreview: %@", log: OSLog.default, type: .info, snapshotURL.path)
+                            }
+                            
+                            self.statusLabel.text = "Model loaded in Quick Look."
                             self.downloadedFileURL = usdzURL
                             self.downloadButton.isHidden = false
                             self.shareButton.isHidden = false
-                            let previewController = QLPreviewController()
-                            previewController.dataSource = self
-                            self.present(previewController, animated: true) {
-                                self.statusLabel.text = "Model loaded in Quick Look."
-                                os_log("✅ Loaded USDZ model in QLPreviewController", log: OSLog.default, type: .info)
-                                self.endBackgroundTask()
-                                self.channel?.invokeMethod("processingComplete", arguments: ["usdzPath": usdzURL.path]) { result in
-                                    if let error = result as? FlutterError {
-                                        os_log("Failed to invoke processingComplete: %@", log: OSLog.default, type: .error, error.message ?? "Unknown error")
-                                    }
+                            self.channel?.invokeMethod("processingComplete", arguments: ["usdzPath": usdzURL.path]) { result in
+                                if let error = result as? FlutterError {
+                                    os_log("Failed to invoke processingComplete: %@", log: OSLog.default, type: .error, error.message ?? "Unknown error")
                                 }
                             }
+                            completion(.success(usdzURL, totalSize))
                         }
                     }
                 } else {
                     os_log("❌ Invalid USDZ file format", log: OSLog.default, type: .error)
-                    DispatchQueue.main.async {
-                        self.showErrorAlertWithLink(message: "Invalid USDZ file format")
-                        self.statusLabel.text = "Model download failed."
-                        try? fileManager.removeItem(at: usdzURL)
-                        self.endBackgroundTask()
-                    }
+                    try? fileManager.removeItem(at: usdzURL)
+                    completion(.failure(FlutterError(
+                        code: "INVALID_USDZ",
+                        message: "Invalid USDZ file format",
+                        details: ["modelUrl": modelUrl.absoluteString]
+                    ), modelUrl))
                 }
             } catch {
-                os_log("❌ Failed to move temporary file: %@", log: OSLog.default, type: .error, error.localizedDescription)
-                DispatchQueue.main.async {
-                    self.showErrorAlertWithLink(message: "Failed to process downloaded file: \(error.localizedDescription)")
-                    self.statusLabel.text = "Model download failed."
-                    try? fileManager.removeItem(at: usdzURL)
-                    self.endBackgroundTask()
-                }
+                os_log("❌ Failed to move temporary file or update metadata: %@", log: OSLog.default, type: .error, error.localizedDescription)
+                try? fileManager.removeItem(at: usdzURL)
+                completion(.failure(FlutterError(
+                    code: "SAVE_FAILED",
+                    message: "Failed to process downloaded file or update metadata: \(error.localizedDescription)",
+                    details: ["modelUrl": modelUrl.absoluteString]
+                ), modelUrl))
             }
         }
         task.resume()
@@ -2331,10 +2611,24 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
         statusLabel.text = "Download cancelled."
     }
+    
+    private func updateScanStatus(to status: String, for url: URL) {
+        let success = ScanLocalStorage.shared.updateScanStatus(status, for: url)
+        if !success {
+            os_log("⚠️ Failed to update scan status to %@", log: OSLog.default, type: .error, status)
+        }
+    }
+}
+@available(iOS 13.4, *)
+protocol ControlPanelDelegate: AnyObject {
+    func controlPanelDidTapStart(_ controlPanel: ControlPanel)
+    func controlPanelDidTapStop(_ controlPanel: ControlPanel)
 }
 
+@available(iOS 13.4, *)
 class ControlPanel: UIView {
     private let statusLabel = UILabel()
+    private let durationLabel = UILabel() // New label for duration
     private let startButton = UIButton(type: .system)
     private let stopButton = UIButton(type: .system)
     private let stackView = UIStackView()
@@ -2361,6 +2655,12 @@ class ControlPanel: UIView {
         statusLabel.numberOfLines = 0
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
 
+        durationLabel.text = "Duration: 00:00"
+        durationLabel.textColor = .white
+        durationLabel.font = .systemFont(ofSize: 14)
+        durationLabel.textAlignment = .center
+        durationLabel.translatesAutoresizingMaskIntoConstraints = false
+
         startButton.setTitle("Start", for: .normal)
         startButton.tintColor = .white
         startButton.backgroundColor = .systemBlue
@@ -2383,6 +2683,7 @@ class ControlPanel: UIView {
         stackView.addArrangedSubview(stopButton)
 
         addSubview(statusLabel)
+        addSubview(durationLabel)
         addSubview(stackView)
 
         NSLayoutConstraint.activate([
@@ -2390,7 +2691,11 @@ class ControlPanel: UIView {
             statusLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             statusLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
 
-            stackView.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 10),
+            durationLabel.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 5),
+            durationLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            durationLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+
+            stackView.topAnchor.constraint(equalTo: durationLabel.bottomAnchor, constant: 10),
             stackView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             stackView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             stackView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
@@ -2404,9 +2709,18 @@ class ControlPanel: UIView {
         statusLabel.text = status
     }
 
+    func updateDuration(_ duration: Double) {
+        let minutes = Int(duration) / 60
+        let seconds = Int(duration) % 60
+        durationLabel.text = String(format: "Duration: %02d:%02d", minutes, seconds)
+    }
+
     func updateUIForScanningState(isScanning: Bool, hasMeshes: Bool) {
         startButton.isEnabled = !isScanning
         stopButton.isEnabled = isScanning
+        if !isScanning {
+            durationLabel.text = "Duration: 00:00"
+        }
     }
 
     @objc private func startTapped() {
@@ -2416,11 +2730,6 @@ class ControlPanel: UIView {
     @objc private func stopTapped() {
         delegate?.controlPanelDidTapStop(self)
     }
-}
-
-protocol ControlPanelDelegate: AnyObject {
-    func controlPanelDidTapStart(_ controlPanel: ControlPanel)
-    func controlPanelDidTapStop(_ controlPanel: ControlPanel)
 }
 
 // MARK: - LocationManager
@@ -2492,4 +2801,3 @@ struct CapturedMesh: Codable {
         return plyContent
     }
 }
-

@@ -1,7 +1,8 @@
 import 'dart:io';
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import 'model_detail_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -14,7 +15,7 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   static const platform = MethodChannel('com.demo.channel/message');
   List<Map<String, dynamic>> scans = [];
-  bool isListView = true;
+  String currentView = 'list'; // Track current view: 'list', 'grid', or 'map'
 
   @override
   void initState() {
@@ -25,218 +26,200 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _fetchScans() async {
     try {
       final result = await platform.invokeMethod('getSavedScans');
-      print('Fetched scans: $result'); // Debug log
       setState(() {
-        scans = (result as List<dynamic>).map((scan) {
+        scans = (result['scans'] as List<dynamic>).map((scan) {
           final scanMap = (scan as Map<dynamic, dynamic>).cast<String, dynamic>();
           final modelSizeBytes = (scanMap['modelSizeBytes'] as num?)?.toDouble() ?? 0.0;
           final fileSizeMB = modelSizeBytes / (1024 * 1024);
+          final metadata = {
+            'scan_id': scanMap['scanID'] ?? scanMap['folderPath'].split('/').last,
+            'name': scanMap['name'] ?? 'Unnamed Scan',
+            'timestamp': scanMap['timestamp'] ?? DateTime.now().toIso8601String(),
+            'location_name': scanMap['locationName'] ?? 'Unknown Location',
+            'coordinates': scanMap['coordinates'] ?? [],
+            'image_count': scanMap['imageCount'] ?? 0,
+            'model_size_bytes': modelSizeBytes,
+            'status': scanMap['status'] ?? 'pending',
+            'snapshot_path': scanMap['snapshotPath'],
+          };
           return {
             ...scanMap,
             'fileSizeMB': fileSizeMB,
-            'imageCount': scanMap['imageCount'] ?? 0,
-            'locationName': scanMap['locationName'] ?? 'Unknown Location',
+            'metadata': metadata,
+            'status': metadata['status'],
+            'usdzPath': scanMap['usdzPath'] ?? (scanMap['hasUSDZ'] == true ? '${scanMap['folderPath']}/model.usdz' : null),
+            'snapshotPath': scanMap['snapshotPath'] != null ? '${scanMap['folderPath']}/${scanMap['snapshotPath']}' : null,
           };
         }).toList();
       });
     } on PlatformException catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to fetch scans: ${e.message}')),
-      );
+      _showSnack('Failed to fetch scans: ${e.message}', isError: true);
     }
   }
 
-  Future<void> _startScan() async {
-    try {
-      final result = await platform.invokeMethod('startScan');
-      print('Scan started: $result');
-      await _fetchScans();
-    } on PlatformException catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to start scan: ${e.message}')),
-      );
-    }
-  }
-
-  Future<void> _deleteScan(String path, String name) async {
-    bool? confirm = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Delete $name'),
-        content: const Text('Are you sure you want to delete this scan?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete', style: TextStyle(color: Colors.red)),
-          ),
-        ],
+  void _showSnack(String message, {bool isError = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? Colors.red : Colors.green,
       ),
     );
-
-    if (confirm != true) return;
-
-    try {
-      final result = await platform.invokeMethod('deleteScan', {'path': path});
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(result)),
-      );
-      await _fetchScans();
-    } on PlatformException catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to delete scan: ${e.message}')),
-      );
-    }
-  }
-
-  Future<void> _previewUSDZ(String usdzPath) async {
-    try {
-      final result = await platform.invokeMethod('openUSDZ', {'path': usdzPath});
-      print(result);
-    } on PlatformException catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to preview USDZ: ${e.message}')),
-      );
-    }
-  }
-
-  Future<void> _shareUSDZ(String usdzPath) async {
-    try {
-      final result = await platform.invokeMethod('shareUSDZ', {'path': usdzPath});
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(result)),
-      );
-    } on PlatformException catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to share model: ${e.message}')),
-      );
-    }
   }
 
   void _navigateToModelDetail(Map<String, dynamic> scan) {
-    print('Navigating to ModelDetailScreen with scan: $scan'); // Debug log
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (context) => ModelDetailScreen(scan: scan),
+      MaterialPageRoute(builder: (context) => ModelDetailScreen(scan: scan)),
+    );
+  }
+
+  List<LatLng> _getAllCoordinates() {
+    List<LatLng> allPoints = [];
+    for (var scan in scans) {
+      final rawCoordinates = scan['metadata']['coordinates'] as List<dynamic>?;
+      if (rawCoordinates != null) {
+        final coordinates = rawCoordinates.map((coord) {
+          if (coord is List<dynamic> && coord.length >= 2) {
+            return [
+              double.tryParse(coord[0].toString()) ?? 0.0,
+              double.tryParse(coord[1].toString()) ?? 0.0
+            ];
+          }
+          return null;
+        }).whereType<List<double>>().toList();
+
+        allPoints.addAll(coordinates.map((coord) => LatLng(coord[0], coord[1])).whereType<LatLng>());
+      }
+    }
+    return allPoints;
+  }
+
+  Widget _buildMapView() {
+    final allPoints = _getAllCoordinates();
+    if (allPoints.isEmpty) {
+      return const Center(child: Text('No location data available', style: TextStyle(color: Colors.white)));
+    }
+
+    final bounds = LatLngBounds.fromPoints(allPoints);
+    final center = bounds.center;
+    const zoom = 10.0;
+
+    return FlutterMap(
+      options: MapOptions(
+        center: center,
+        zoom: zoom,
+        minZoom: 5.0,
+        maxZoom: 18.0,
+        interactiveFlags: InteractiveFlag.all & ~InteractiveFlag.rotate,
       ),
+      children: [
+        TileLayer(
+          urlTemplate: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+          subdomains: const ['a', 'b', 'c'],
+          userAgentPackageName: 'com.example.platform_channel_swift_demo',
+        ),
+        MarkerLayer(
+          markers: allPoints.map((point) => Marker(
+            point: point,
+            width: 40.0,
+            height: 40.0,
+            child: const Icon(Icons.location_pin, color: Colors.red, size: 40.0),
+          )).toList(),
+        ),
+      ],
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: Colors.grey[900], // Grey background
       appBar: AppBar(
-        backgroundColor: Colors.black,
-        automaticallyImplyLeading: false,
-        toolbarHeight: 70,
-        title: const Text(
-          'LIBRARY',
-          style: TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        title: const Text('LIBRARY', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 22)),
         actions: [
           IconButton(
-            icon: Icon(
-              isListView ? Icons.grid_view_rounded : Icons.view_list_rounded,
-              color: Colors.white,
-            ),
-            onPressed: () {
-              setState(() {
-                isListView = !isListView;
-              });
-            },
+            icon: const Icon(Icons.view_list, color: Colors.white),
+            onPressed: () => setState(() => currentView = 'list'),
+          ),
+          IconButton(
+            icon: const Icon(Icons.grid_view, color: Colors.white),
+            onPressed: () => setState(() => currentView = 'grid'),
           ),
           IconButton(
             icon: const Icon(Icons.map, color: Colors.white),
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Map view not implemented')),
-              );
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.add, color: Colors.white),
-            onPressed: _startScan,
+            onPressed: () => setState(() => currentView = 'map'),
           ),
         ],
       ),
-      body: scans.isEmpty
-          ? const Center(
-          child: Text('No scans available', style: TextStyle(color: Colors.white)))
+      body: currentView == 'list' || currentView == 'grid'
+          ? (scans.isEmpty
+          ? const Center(child: Text('No scans available', style: TextStyle(color: Colors.white)))
           : RefreshIndicator(
         onRefresh: _fetchScans,
         color: Colors.white,
-        backgroundColor: Colors.grey[900],
-        child: isListView
-            ? ListView.builder(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
+        backgroundColor: Colors.black, // Black inner background
+        child: ListView.builder(
+          padding: const EdgeInsets.all(16),
           itemCount: scans.length,
           itemBuilder: (context, index) {
             final scan = scans[index];
-            final hasUSDZ = scan['hasUSDZ'] as bool;
+            final status = scan['status'] ?? 'pending';
+            final icons = _statusIcons(status);
+
             return ProjectCard(
-              title: scan['name'] ?? 'Unnamed Scan',
+              title: scan['metadata']['name'],
               subtitle:
-              '${scan['timestamp']?.split('T')[0] ?? 'Unknown'} • ${scan['fileSizeMB'].toStringAsFixed(1)} MB • Images: ${scan['imageCount']} • ${scan['locationName']}',
-              statusLabel: hasUSDZ ? 'Uploaded' : 'Pending',
-              iconSet: [
-                hasUSDZ
-                    ? Icons.check_circle_outline
-                    : Icons.cloud_upload_outlined
-              ],
-              iconColor: hasUSDZ ? Colors.green : Colors.blue,
+              '${scan['timestamp']?.split('T')[0] ?? 'Unknown'} • ${scan['fileSizeMB'].toStringAsFixed(1)} MB • Images (${scan['metadata']['image_count']})',
+              statusLabel: _statusLabel(status),
+              iconSet: icons['icons'],
+              iconColor: icons['color'],
+              isListView: currentView == 'list',
+              usdzPath: scan['usdzPath'],
+              snapshotPath: scan['snapshotPath'],
+              status: status,
               onTap: () => _navigateToModelDetail(scan),
-              onLongPress: hasUSDZ
-                  ? () => _shareUSDZ(scan['usdzPath'])
-                  : () => _deleteScan(
-                scan['folderPath'],
-                scan['name'] ?? 'Unnamed Scan',
-              ),
-            );
-          },
-        )
-            : GridView.builder(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 2,
-            crossAxisSpacing: 10,
-            mainAxisSpacing: 10,
-            childAspectRatio: 0.8,
-          ),
-          itemCount: scans.length,
-          itemBuilder: (context, index) {
-            final scan = scans[index];
-            final hasUSDZ = scan['hasUSDZ'] as bool;
-            return ProjectCard(
-              title: scan['name'] ?? 'Unnamed Scan',
-              subtitle:
-              '${scan['timestamp']?.split('T')[0] ?? 'Unknown'} • ${scan['fileSizeMB'].toStringAsFixed(1)} MB • Images: ${scan['imageCount']} • ${scan['locationName']}',
-              statusLabel: hasUSDZ ? 'Uploaded' : 'Pending',
-              iconSet: [
-                hasUSDZ
-                    ? Icons.check_circle_outline
-                    : Icons.cloud_upload_outlined
-              ],
-              iconColor: hasUSDZ ? Colors.green : Colors.blue,
-              onTap: () => _navigateToModelDetail(scan),
-              onLongPress: hasUSDZ
-                  ? () => _shareUSDZ(scan['usdzPath'])
-                  : () => _deleteScan(
-                scan['folderPath'],
-                scan['name'] ?? 'Unnamed Scan',
-              ),
+              onLongPress: () {},
             );
           },
         ),
-      ),
+      ))
+          : _buildMapView(),
     );
+  }
+
+  Map<String, dynamic> _statusIcons(String status) {
+    switch (status) {
+      case 'uploaded':
+        return {
+          'icons': [Icons.check_box, Icons.image],
+          'color': Colors.green
+        };
+      case 'failed':
+        return {
+          'icons': [Icons.error_outline, Icons.image_not_supported],
+          'color': Colors.red
+        };
+      case 'pending':
+      default:
+        return {
+          'icons': [Icons.access_time, Icons.image],
+          'color': Colors.orange
+        };
+    }
+  }
+
+  String _statusLabel(String status) {
+    switch (status) {
+      case 'uploaded':
+        return 'Uploaded';
+      case 'failed':
+        return 'Upload error';
+      case 'pending':
+      default:
+        return 'Pending';
+    }
   }
 }
 
@@ -248,6 +231,10 @@ class ProjectCard extends StatelessWidget {
   final Color iconColor;
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
+  final bool isListView;
+  final String? usdzPath;
+  final String? snapshotPath;
+  final String status;
 
   const ProjectCard({
     super.key,
@@ -255,80 +242,126 @@ class ProjectCard extends StatelessWidget {
     required this.subtitle,
     required this.statusLabel,
     required this.iconSet,
-    this.iconColor = Colors.green,
+    required this.iconColor,
     this.onTap,
     this.onLongPress,
+    required this.isListView,
+    this.usdzPath,
+    this.snapshotPath,
+    required this.status,
   });
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () {
-        print('ProjectCard tapped: $title'); // Debug log
-        onTap?.call();
-      },
+      onTap: onTap,
       onLongPress: onLongPress,
-      behavior: HitTestBehavior.opaque, // Ensure entire card is tappable
       child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 6),
-        padding: const EdgeInsets.all(16),
+        margin: const EdgeInsets.symmetric(vertical: 10),
+        padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: const Color(0xFF1A1A1A),
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
+          color: Colors.black, // Black card color
+          // Removed border: Border.all(color: Colors.grey[700]!)
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    title,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                Text(
-                  statusLabel,
-                  style: const TextStyle(
-                    color: Colors.white60,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    subtitle,
-                    style: const TextStyle(
-                      color: Colors.white54,
-                      fontSize: 13,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                Row(
-                  children: iconSet
-                      .map((icon) => Padding(
-                    padding: const EdgeInsets.only(left: 6),
-                    child: Icon(icon, color: iconColor, size: 18),
-                  ))
-                      .toList(),
-                ),
-                const SizedBox(width: 8),
-                const Icon(Icons.more_horiz, color: Colors.white60),
-              ],
-            ),
-          ],
-        ),
+        child: isListView ? _buildListTile() : _buildGridCard(context),
       ),
     );
+  }
+
+  Widget _buildListTile() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(title,
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.w600, color: Colors.white)),
+            ),
+            Text(statusLabel, style: TextStyle(color: iconColor, fontSize: 13)),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Text(subtitle, style: TextStyle(color: Colors.grey[400], fontSize: 12)),
+            const Spacer(),
+            ...iconSet
+                .map((i) => Padding(
+              padding: const EdgeInsets.only(left: 6),
+              child: Icon(i, color: iconColor, size: 16),
+            ))
+                .toList(),
+            const SizedBox(width: 4),
+            Icon(Icons.more_horiz, color: Colors.grey[400], size: 20),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildGridCard(BuildContext context) {
+    return SizedBox(
+      height: 250,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: _previewContent(),
+          ),
+          Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Colors.transparent, Colors.black.withOpacity(0.8)],
+              ),
+            ),
+          ),
+          Positioned(
+            top: 12,
+            right: 12,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: iconColor.withOpacity(0.9),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Text(statusLabel,
+                  style: const TextStyle(color: Colors.white, fontSize: 12)),
+            ),
+          ),
+          Positioned(
+            bottom: 16,
+            left: 16,
+            right: 16,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold)),
+                const SizedBox(height: 6),
+                Text(subtitle,
+                    style: const TextStyle(color: Colors.white70, fontSize: 14)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _previewContent() {
+    if (status == 'uploaded' && snapshotPath != null && File(snapshotPath!).existsSync()) {
+      return Image.file(File(snapshotPath!), fit: BoxFit.cover);
+    } else {
+      return Center(child: Icon(Icons.cloud_upload, color: iconColor, size: 40));
+    }
   }
 }
