@@ -1,8 +1,8 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'model_detail_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -15,45 +15,85 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   static const platform = MethodChannel('com.demo.channel/message');
   List<Map<String, dynamic>> scans = [];
-  String currentView = 'list'; // Track current view: 'list', 'grid', or 'map'
+  String currentView = 'list';
+  GoogleMapController? _mapController;
+  bool _isFullScreenMap = false;
+  Timer? _refreshTimer;
+  bool _isRefreshing = false;
 
   @override
   void initState() {
     super.initState();
     _fetchScans();
+    platform.setMethodCallHandler(_handleMethodCall);
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+      _fetchScans();
+    });
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    _mapController?.dispose();
+    super.dispose();
   }
 
   Future<void> _fetchScans() async {
+    setState(() {
+      _isRefreshing = true;
+    });
     try {
       final result = await platform.invokeMethod('getSavedScans');
+      final newScans = (result['scans'] as List<dynamic>).map((scan) {
+        final scanMap = (scan as Map<dynamic, dynamic>).cast<String, dynamic>();
+        final modelSizeBytes = (scanMap['modelSizeBytes'] as num?)?.toDouble() ?? 0.0;
+        final fileSizeMB = modelSizeBytes / (1024 * 1024);
+        final metadata = {
+          'scan_id': scanMap['scanID'] ?? scanMap['folderPath'].split('/').last,
+          'name': scanMap['name'] ?? 'Unnamed Scan',
+          'timestamp': scanMap['timestamp'] ?? DateTime.now().toIso8601String(),
+          'location_name': scanMap['locationName'] ?? 'Unknown Location',
+          'coordinates': scanMap['coordinates'] ?? [],
+          'image_count': scanMap['imageCount'] ?? 0,
+          'model_size_bytes': modelSizeBytes,
+          'status': scanMap['status'] ?? 'pending',
+          'snapshot_path': scanMap['snapshotPath'],
+        };
+        return {
+          ...scanMap,
+          'fileSizeMB': fileSizeMB,
+          'metadata': metadata,
+          'status': metadata['status'],
+          'usdzPath': scanMap['usdzPath'] ?? (scanMap['hasUSDZ'] == true ? '${scanMap['folderPath']}/model.usdz' : null),
+          'snapshotPath': scanMap['snapshotPath'] != null ? '${scanMap['folderPath']}/${scanMap['snapshotPath']}' : null,
+        };
+      }).toList();
       setState(() {
-        scans = (result['scans'] as List<dynamic>).map((scan) {
-          final scanMap = (scan as Map<dynamic, dynamic>).cast<String, dynamic>();
-          final modelSizeBytes = (scanMap['modelSizeBytes'] as num?)?.toDouble() ?? 0.0;
-          final fileSizeMB = modelSizeBytes / (1024 * 1024);
-          final metadata = {
-            'scan_id': scanMap['scanID'] ?? scanMap['folderPath'].split('/').last,
-            'name': scanMap['name'] ?? 'Unnamed Scan',
-            'timestamp': scanMap['timestamp'] ?? DateTime.now().toIso8601String(),
-            'location_name': scanMap['locationName'] ?? 'Unknown Location',
-            'coordinates': scanMap['coordinates'] ?? [],
-            'image_count': scanMap['imageCount'] ?? 0,
-            'model_size_bytes': modelSizeBytes,
-            'status': scanMap['status'] ?? 'pending',
-            'snapshot_path': scanMap['snapshotPath'],
-          };
-          return {
-            ...scanMap,
-            'fileSizeMB': fileSizeMB,
-            'metadata': metadata,
-            'status': metadata['status'],
-            'usdzPath': scanMap['usdzPath'] ?? (scanMap['hasUSDZ'] == true ? '${scanMap['folderPath']}/model.usdz' : null),
-            'snapshotPath': scanMap['snapshotPath'] != null ? '${scanMap['folderPath']}/${scanMap['snapshotPath']}' : null,
-          };
-        }).toList();
+        scans = newScans;
+        _isRefreshing = false;
       });
+      print('Fetched ${newScans.length} scans');
     } on PlatformException catch (e) {
+      print('Error fetching scans: ${e.message}');
+      setState(() {
+        _isRefreshing = false;
+      });
       _showSnack('Failed to fetch scans: ${e.message}', isError: true);
+    }
+  }
+
+  Future<void> _handleMethodCall(MethodCall call) async {
+    if (call.method == 'scanComplete' || call.method == 'processingComplete') {
+      try {
+        print('Received ${call.method} with arguments: ${call.arguments}');
+        await _fetchScans();
+        _showSnack('Scan updated successfully');
+      } catch (e) {
+        print('Error handling ${call.method}: $e');
+        _showSnack('Error updating scans: $e', isError: true);
+      }
+    } else {
+      print('Unhandled method call: ${call.method} with arguments: ${call.arguments}');
     }
   }
 
@@ -73,10 +113,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  List<LatLng> _getAllCoordinates() {
+  Map<String, dynamic> _getAllCoordinatesByScan() {
+    Map<String, List<LatLng>> scanCoordinates = {};
     List<LatLng> allPoints = [];
+
     for (var scan in scans) {
+      final scanId = scan['metadata']['scan_id'] as String;
       final rawCoordinates = scan['metadata']['coordinates'] as List<dynamic>?;
+      List<LatLng> points = [];
+
       if (rawCoordinates != null) {
         final coordinates = rawCoordinates.map((coord) {
           if (coord is List<dynamic> && coord.length >= 2) {
@@ -88,52 +133,163 @@ class _DashboardScreenState extends State<DashboardScreen> {
           return null;
         }).whereType<List<double>>().toList();
 
-        allPoints.addAll(coordinates.map((coord) => LatLng(coord[0], coord[1])).whereType<LatLng>());
+        points = coordinates
+            .map((coord) => LatLng(coord[0], coord[1]))
+            .where((point) => point.latitude != 0.0 && point.longitude != 0.0)
+            .toList();
+
+        if (points.isNotEmpty) {
+          scanCoordinates[scanId] = points;
+          allPoints.addAll(points);
+        }
       }
     }
-    return allPoints;
+
+    return {
+      'scanCoordinates': scanCoordinates,
+      'allPoints': allPoints,
+    };
   }
 
-  Widget _buildMapView() {
-    final allPoints = _getAllCoordinates();
-    if (allPoints.isEmpty) {
-      return const Center(child: Text('No location data available', style: TextStyle(color: Colors.white)));
+  Map<String, LatLng>? _calculateBounds(List<LatLng> points) {
+    if (points.isEmpty) return null;
+    double minLat = points.first.latitude;
+    double maxLat = points.first.latitude;
+    double minLng = points.first.longitude;
+    double maxLng = points.first.longitude;
+
+    for (var point in points) {
+      if (point.latitude < minLat) minLat = point.latitude;
+      if (point.latitude > maxLat) maxLat = point.latitude;
+      if (point.longitude < minLng) minLng = point.longitude;
+      if (point.longitude > maxLng) maxLng = point.longitude;
     }
 
-    final bounds = LatLngBounds.fromPoints(allPoints);
-    final center = bounds.center;
-    const zoom = 10.0;
+    final southwest = LatLng(minLat, minLng);
+    final northeast = LatLng(maxLat, maxLng);
+    final center = LatLng(
+      (minLat + maxLat) / 2,
+      (minLng + maxLng) / 2,
+    );
 
-    return FlutterMap(
-      options: MapOptions(
-        center: center,
-        zoom: zoom,
-        minZoom: 5.0,
-        maxZoom: 18.0,
-        interactiveFlags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+    return {
+      'southwest': southwest,
+      'northeast': northeast,
+      'center': center,
+    };
+  }
+
+  Widget _buildMapView({bool isFullScreen = false}) {
+    final coordinatesData = _getAllCoordinatesByScan();
+    final scanCoordinates = coordinatesData['scanCoordinates'] as Map<String, List<LatLng>>;
+    final allPoints = coordinatesData['allPoints'] as List<LatLng>;
+    final defaultPosition = const LatLng(0.0, 0.0);
+    const defaultZoom = 2.0;
+
+    LatLng center = defaultPosition;
+    double zoom = defaultZoom;
+    Map<String, LatLng>? bounds;
+
+    if (allPoints.isNotEmpty) {
+      bounds = _calculateBounds(allPoints);
+      center = bounds!['center'] as LatLng;
+      zoom = 15.0;
+    }
+
+    final markers = allPoints.isNotEmpty
+        ? scans.asMap().entries.where((entry) {
+      final scan = entry.value;
+      final scanId = scan['metadata']['scan_id'] as String;
+      return scanCoordinates.containsKey(scanId);
+    }).map((entry) {
+      final index = entry.key;
+      final scan = entry.value;
+      final points = scanCoordinates[scan['metadata']['scan_id']]!;
+      return Marker(
+        markerId: MarkerId('scan_$index'),
+        position: points.first,
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+        infoWindow: InfoWindow(
+          title: scan['metadata']['name'] ?? 'Unnamed Scan',
+          snippet: scan['metadata']['location_name'] ?? 'Unknown Location',
+        ),
+      );
+    }).toSet()
+        : <Marker>{};
+
+    final polylines = scanCoordinates.isNotEmpty
+        ? scanCoordinates.entries.map((entry) {
+      final scanId = entry.key;
+      final points = entry.value;
+      return Polyline(
+        polylineId: PolylineId('scan_path_$scanId'),
+        points: points,
+        color: Colors.blue,
+        width: 4,
+      );
+    }).toSet()
+        : <Polyline>{};
+
+    return Container(
+      color: Colors.grey[900],
+      child: SafeArea(
+        child: Stack(
+          children: [
+            GoogleMap(
+              onMapCreated: (GoogleMapController controller) {
+                _mapController = controller;
+                if (allPoints.isNotEmpty && bounds != null) {
+                  _mapController?.animateCamera(
+                    CameraUpdate.newLatLngBounds(
+                      LatLngBounds(
+                        southwest: bounds['southwest'] as LatLng,
+                        northeast: bounds['northeast'] as LatLng,
+                      ),
+                      50.0,
+                    ),
+                  );
+                } else {
+                  _mapController?.animateCamera(
+                    CameraUpdate.newCameraPosition(
+                      CameraPosition(target: center, zoom: zoom),
+                    ),
+                  );
+                }
+              },
+              initialCameraPosition: CameraPosition(
+                target: center,
+                zoom: zoom,
+              ),
+              markers: markers,
+              polylines: polylines,
+              myLocationEnabled: true,
+              myLocationButtonEnabled: true,
+              zoomControlsEnabled: false,
+              mapType: MapType.normal,
+            ),
+            Positioned(
+              top: 16,
+              left: 16,
+              child: IconButton(
+                icon: const Icon(Icons.close, color: Colors.white, size: 30),
+                onPressed: () {
+                  setState(() {
+                    _isFullScreenMap = false;
+                    currentView = 'list';
+                  });
+                },
+              ),
+            ),
+          ],
+        ),
       ),
-      children: [
-        TileLayer(
-          urlTemplate: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-          subdomains: const ['a', 'b', 'c'],
-          userAgentPackageName: 'com.example.platform_channel_swift_demo',
-        ),
-        MarkerLayer(
-          markers: allPoints.map((point) => Marker(
-            point: point,
-            width: 40.0,
-            height: 40.0,
-            child: const Icon(Icons.location_pin, color: Colors.red, size: 40.0),
-          )).toList(),
-        ),
-      ],
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey[900], // Grey background
+      backgroundColor: Colors.grey[900],
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -141,51 +297,76 @@ class _DashboardScreenState extends State<DashboardScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.view_list, color: Colors.white),
-            onPressed: () => setState(() => currentView = 'list'),
+            onPressed: () => setState(() {
+              currentView = 'list';
+              _isFullScreenMap = false;
+            }),
           ),
           IconButton(
             icon: const Icon(Icons.grid_view, color: Colors.white),
-            onPressed: () => setState(() => currentView = 'grid'),
+            onPressed: () => setState(() {
+              currentView = 'grid';
+              _isFullScreenMap = false;
+            }),
           ),
           IconButton(
             icon: const Icon(Icons.map, color: Colors.white),
-            onPressed: () => setState(() => currentView = 'map'),
+            onPressed: () => setState(() {
+              currentView = 'map';
+              _isFullScreenMap = true;
+            }),
           ),
         ],
       ),
-      body: currentView == 'list' || currentView == 'grid'
-          ? (scans.isEmpty
-          ? const Center(child: Text('No scans available', style: TextStyle(color: Colors.white)))
-          : RefreshIndicator(
-        onRefresh: _fetchScans,
-        color: Colors.white,
-        backgroundColor: Colors.black, // Black inner background
-        child: ListView.builder(
-          padding: const EdgeInsets.all(16),
-          itemCount: scans.length,
-          itemBuilder: (context, index) {
-            final scan = scans[index];
-            final status = scan['status'] ?? 'pending';
-            final icons = _statusIcons(status);
+      body: Stack(
+        children: [
+          currentView == 'list' || currentView == 'grid'
+              ? (scans.isEmpty
+              ? const Center(child: Text('No scans available', style: TextStyle(color: Colors.white)))
+              : RefreshIndicator(
+            onRefresh: _fetchScans,
+            color: Colors.white,
+            backgroundColor: Colors.black,
+            child: Stack(
+              children: [
+                ListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: scans.length,
+                  itemBuilder: (context, index) {
+                    final scan = scans[index];
+                    final status = scan['status'] ?? 'pending';
+                    final icons = _statusIcons(status);
 
-            return ProjectCard(
-              title: scan['metadata']['name'],
-              subtitle:
-              '${scan['timestamp']?.split('T')[0] ?? 'Unknown'} • ${scan['fileSizeMB'].toStringAsFixed(1)} MB • Images (${scan['metadata']['image_count']})',
-              statusLabel: _statusLabel(status),
-              iconSet: icons['icons'],
-              iconColor: icons['color'],
-              isListView: currentView == 'list',
-              usdzPath: scan['usdzPath'],
-              snapshotPath: scan['snapshotPath'],
-              status: status,
-              onTap: () => _navigateToModelDetail(scan),
-              onLongPress: () {},
-            );
-          },
-        ),
-      ))
-          : _buildMapView(),
+                    return ProjectCard(
+                      title: scan['metadata']['name'],
+                      subtitle:
+                      '${scan['timestamp']?.split('T')[0] ?? 'Unknown'} • ${scan['fileSizeMB'].toStringAsFixed(1)} MB • Images (${scan['metadata']['image_count']})',
+                      statusLabel: _statusLabel(status),
+                      iconSet: icons['icons'],
+                      iconColor: icons['color'],
+                      isListView: currentView == 'list',
+                      usdzPath: scan['usdzPath'],
+                      snapshotPath: scan['snapshotPath'],
+                      status: status,
+                      onTap: () => _navigateToModelDetail(scan),
+                      onLongPress: () {},
+                    );
+                  },
+                ),
+                if (_isRefreshing)
+                  const Center(
+                    child: CircularProgressIndicator(
+                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    ),
+                  ),
+              ],
+            ),
+          ))
+              : _buildMapView(isFullScreen: _isFullScreenMap),
+          if (_isFullScreenMap)
+            _buildMapView(isFullScreen: true),
+        ],
+      ),
     );
   }
 
@@ -261,8 +442,7 @@ class ProjectCard extends StatelessWidget {
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(12),
-          color: Colors.black, // Black card color
-          // Removed border: Border.all(color: Colors.grey[700]!)
+          color: Colors.black,
         ),
         child: isListView ? _buildListTile() : _buildGridCard(context),
       ),
@@ -276,9 +456,14 @@ class ProjectCard extends StatelessWidget {
         Row(
           children: [
             Expanded(
-              child: Text(title,
-                  style: const TextStyle(
-                      fontSize: 16, fontWeight: FontWeight.w600, color: Colors.white)),
+              child: Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white,
+                ),
+              ),
             ),
             Text(statusLabel, style: TextStyle(color: iconColor, fontSize: 13)),
           ],
@@ -341,14 +526,19 @@ class ProjectCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title,
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold)),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
                 const SizedBox(height: 6),
-                Text(subtitle,
-                    style: const TextStyle(color: Colors.white70, fontSize: 14)),
+                Text(
+                  subtitle,
+                  style: const TextStyle(color: Colors.white70, fontSize: 14),
+                ),
               ],
             ),
           ),

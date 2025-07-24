@@ -45,10 +45,19 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
-	<!-- Added for camera access -->
+	<!-- Camera permission -->
 	<key>NSCameraUsageDescription</key>
 	<string>We need access to your camera to perform 3D scans and process models.</string>
-	<!-- Added for ATS exception -->
+	<!-- Location permission -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>We need your location to align 3D models with your surroundings.</string>
+	<!-- Google Maps API key -->
+	<key>GMSApiKey</key>
+	<string>AIzaSyBGY58NEOvds0GTr8jmvd6TrOu3-W6SSBQ</string>
+	<!-- Enable Flutter platform views -->
+	<key>io.flutter.embedded_views_preview</key>
+	<true/>
+	<!-- ATS exception for insecure HTTP -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSExceptionDomains</key>

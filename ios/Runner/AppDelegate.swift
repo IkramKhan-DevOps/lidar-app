@@ -4,7 +4,7 @@ import os.log
 import ARKit
 import QuickLook
 import UniformTypeIdentifiers
-import SwiftUI
+import GoogleMaps
 
 @available(iOS 13.4, *)
 @main
@@ -12,8 +12,8 @@ import SwiftUI
     private var channel: FlutterMethodChannel?
     private var currentUSDZURL: URL?
     private var openFolderResult: FlutterResult?
-    private var modelVC: ModelViewController? // Retain ModelViewController during processing
-    private var scanCache: [(url: URL, metadata: ScanMetadata?)]? // Cache for getSavedScans
+    private var modelVC: ModelViewController?
+    private var scanCache: [(url: URL, metadata: ScanMetadata?)]?
 
     override func application(
         _ application: UIApplication,
@@ -22,6 +22,9 @@ import SwiftUI
         guard let controller = window?.rootViewController as? FlutterViewController else {
             fatalError("Root view controller must be FlutterViewController")
         }
+
+        GMSServices.provideAPIKey("AIzaSyBGY58NEOvds0GTr8jmvd6TrOu3-W6SSBQ")
+        GeneratedPluginRegistrant.register(with: self)
 
         channel = FlutterMethodChannel(
             name: "com.demo.channel/message",
@@ -78,6 +81,8 @@ import SwiftUI
                     self.showUSDZCard(call: call, result: result)
                 case "checkZipFile":
                     self.checkZipFile(call: call, result: result)
+                case "scanComplete":
+                    self.handleScanComplete(call: call, result: result)
                 default:
                     result(FlutterMethodNotImplemented)
                 }
@@ -91,6 +96,33 @@ import SwiftUI
         }
 
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    }
+
+    private func handleScanComplete(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let args = call.arguments as? [String: Any],
+              let folderPath = args["folderPath"] as? String else {
+            os_log("Invalid scanComplete arguments: %@", log: OSLog.default, type: .error, String(describing: call.arguments))
+            result(FlutterError(
+                code: "INVALID_ARGUMENT",
+                message: "Invalid or missing folder path in scanComplete.",
+                details: nil
+            ))
+            return
+        }
+
+        // Invalidate cache to ensure fresh scan data
+        invalidateScanCache()
+        os_log("Received scanComplete for folder: %@", log: OSLog.default, type: .info, folderPath)
+
+        // Fetch updated scans and notify Flutter
+        getSavedScans { [weak self] scansResult in
+            self?.channel?.invokeMethod("scanComplete", arguments: args) { invokeResult in
+                if let error = invokeResult as? FlutterError {
+                    os_log("Failed to invoke scanComplete: %@", log: OSLog.default, type: .error, error.message ?? "Unknown error")
+                }
+            }
+            result("Scan complete notification processed")
+        }
     }
 
     private func showUSDZCard(call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -157,7 +189,6 @@ import SwiftUI
                 let dateFormatter = ISO8601DateFormatter()
                 let usdzURL = folderURL.appendingPathComponent("model.usdz")
                 let hasUsdz = fileManager.fileExists(atPath: usdzURL.path)
-                // Validate coordinates
                 let validCoordinates = metadata.coordinates?.filter { coord in
                     guard coord.count == 2 else { return false }
                     let lat = coord[0], lon = coord[1]
@@ -224,37 +255,8 @@ import SwiftUI
     }
 
     private func getSavedScans(result: @escaping FlutterResult) {
-        if let cachedScans = scanCache {
-            let dateFormatter = ISO8601DateFormatter()
-            let scansData: [[String: Any]] = cachedScans.compactMap { scan in
-                guard let metadata = scan.metadata else { return nil }
-                let validCoordinates = metadata.coordinates?.filter { coord in
-                    guard coord.count == 2 else { return false }
-                    let lat = coord[0], lon = coord[1]
-                    return lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180
-                } ?? []
-                return [
-                    "scanID": metadata.scanID,
-                    "name": metadata.name,
-                    "folderPath": scan.url.path,
-                    "hasUSDZ": ScanLocalStorage.shared.hasUSDZModel(in: scan.url),
-                    "usdzPath": scan.url.appendingPathComponent("model.usdz").path,
-                    "timestamp": dateFormatter.string(from: metadata.timestamp),
-                    "coordinates": validCoordinates,
-                    "coordinateTimestamps": metadata.coordinateTimestamps ?? [],
-                    "locationName": metadata.locationName ?? "",
-                    "modelSizeBytes": metadata.modelSizeBytes ?? 0,
-                    "imageCount": metadata.imageCount,
-                    "status": metadata.status,
-                    "snapshotPath": metadata.snapshotPath ?? ""
-                ]
-            }
-            result(["scans": scansData])
-            return
-        }
-
         let scans = ScanLocalStorage.shared.getAllScans()
-        scanCache = scans // Cache the scans
+        scanCache = scans // Update cache with latest scans
         let dateFormatter = ISO8601DateFormatter()
         let scansData: [[String: Any]] = scans.compactMap { scan in
             guard let metadata = scan.metadata else { return nil }
@@ -562,7 +564,6 @@ import SwiftUI
             return
         }
 
-        // Retain ModelViewController
         self.modelVC = ModelViewController()
         guard let modelVC = self.modelVC else {
             result(FlutterError(
@@ -589,20 +590,18 @@ import SwiftUI
             }
         }
 
-        // Notify Flutter that processing has started
         channel?.invokeMethod("updateProcessingStatus", arguments: ["status": "processing"]) { error in
             if let error = error {
                 os_log("Failed to notify Flutter of processing start: %@", log: OSLog.default, type: .error, (error as AnyObject).localizedDescription)
             }
         }
 
-        // Add timeout for processing
-        let timeout: TimeInterval = 300 // 5 minutes
+        let timeout: TimeInterval = 300
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let timeoutDate = Date().addingTimeInterval(timeout)
             modelVC.processZipFile(at: zipURL) { [weak self] processResult in
                 guard let self = self else { return }
-                defer { self.modelVC = nil } // Release after completion
+                defer { self.modelVC = nil }
 
                 if Date() > timeoutDate {
                     os_log("⚠️ Processing timed out after %f seconds", log: OSLog.default, type: .error, timeout)
@@ -626,6 +625,15 @@ import SwiftUI
                         os_log("⚠️ Failed to update scan status to uploaded", log: OSLog.default, type: .error)
                     }
                     self.invalidateScanCache()
+                    self.channel?.invokeMethod("processingComplete", arguments: [
+                        "folderPath": scanFolderURL.path,
+                        "usdzPath": usdzURL.path,
+                        "modelSizeBytes": modelSizeBytes
+                    ]) { invokeResult in
+                        if let error = invokeResult as? FlutterError {
+                            os_log("Failed to invoke processingComplete: %@", log: OSLog.default, type: .error, error.message ?? "Unknown error")
+                        }
+                    }
                     result([
                         "usdzPath": usdzURL.path,
                         "modelSizeBytes": modelSizeBytes
@@ -637,6 +645,14 @@ import SwiftUI
                         os_log("⚠️ Failed to update scan status to failed", log: OSLog.default, type: .error)
                     }
                     self.invalidateScanCache()
+                    self.channel?.invokeMethod("processingComplete", arguments: [
+                        "folderPath": scanFolderURL.path,
+                        "status": "failed"
+                    ]) { invokeResult in
+                        if let error = invokeResult as? FlutterError {
+                            os_log("Failed to invoke processingComplete: %@", log: OSLog.default, type: .error, error.message ?? "Unknown error")
+                        }
+                    }
                     result(FlutterError(
                         code: error.code,
                         message: error.message,
@@ -685,7 +701,6 @@ import SwiftUI
         os_log("Invalidated scan cache", log: OSLog.default, type: .info)
     }
 
-    // MARK: - QLPreviewControllerDataSource
     func numberOfPreviewItems(in controller: QLPreviewController) -> Int {
         return currentUSDZURL != nil ? 1 : 0
     }
@@ -694,7 +709,6 @@ import SwiftUI
         return currentUSDZURL! as QLPreviewItem
     }
 
-    // MARK: - UIDocumentPickerDelegate
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
         openFolderResult?("Folder opened successfully")
         openFolderResult = nil

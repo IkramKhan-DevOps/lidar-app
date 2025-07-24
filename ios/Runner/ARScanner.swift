@@ -454,7 +454,7 @@ class ARScanner: NSObject {
     private var cameraPositions: [simd_float3] = []
     private var lastCameraPosition: simd_float3?
     private var coordinates: [[Double]] = []
-    private var coordinateTimestamps: [Double] = [] // New array for timestamps
+    private var coordinateTimestamps: [Double] = []
     private let locationManager = LocationManager()
     var currentScanFolderURL: URL?
     private var imageCount: Int = 0
@@ -462,7 +462,7 @@ class ARScanner: NSObject {
     private var lastCompletionPercentage: Int?
     private var scanStartTime: Date?
     private var scanDuration: Double = 0.0
-    private var lastCoordinateCaptureTime: TimeInterval = 0 // New property for time-based capture
+    private var lastCoordinatePosition: simd_float3? // Property for distance-based capture
 
     var view: ARSCNView { return arView }
     var isScanning: Bool = false
@@ -525,9 +525,9 @@ class ARScanner: NSObject {
         isScanning = true
         isProcessingFrames = true
         coordinates.removeAll()
-        coordinateTimestamps.removeAll() // Clear timestamps
+        coordinateTimestamps.removeAll()
+        lastCoordinatePosition = nil // Reset last position
         imageCount = 0
-        lastCoordinateCaptureTime = 0 // Reset capture time
         scanStartTime = Date()
         scanDuration = 0.0
         updateStatus("Ready to scan! Move your device slowly to capture the scene.", isCritical: true)
@@ -553,7 +553,7 @@ class ARScanner: NSObject {
                         tempFolderURL: tempFolderURL,
                         name: name,
                         coordinates: self.coordinates,
-                        coordinateTimestamps: self.coordinateTimestamps, // Pass timestamps
+                        coordinateTimestamps: self.coordinateTimestamps,
                         imageCount: self.imageCount,
                         durationSeconds: self.scanDuration
                     )
@@ -602,12 +602,12 @@ class ARScanner: NSObject {
         cameraPositions.removeAll()
         lastCameraPosition = nil
         coordinates.removeAll()
-        coordinateTimestamps.removeAll() // Clear timestamps
+        coordinateTimestamps.removeAll()
+        lastCoordinatePosition = nil // Reset last position
         imageCount = 0
         lastSignificantMeshUpdate = Date()
         scanStartTime = nil
         scanDuration = 0.0
-        lastCoordinateCaptureTime = 0 // Reset capture time
         if let tempFolderURL = currentScanFolderURL {
             try? FileManager.default.removeItem(at: tempFolderURL)
         }
@@ -819,7 +819,7 @@ class ARScanner: NSObject {
         let element = SCNGeometryElement(indices: lineIndices, primitiveType: .line)
 
         let geometry = SCNGeometry(sources: [vertexSource], elements: [element])
-        geometry.firstMaterial?.lightingModel = .constant
+        geometry.firstMaterial?.lightingModel = .constant // Fixed: Changed 'geography' to 'geometry'
         geometry.firstMaterial?.diffuse.contents = UIColor.white
         geometry.firstMaterial?.isDoubleSided = true
 
@@ -1036,10 +1036,24 @@ extension ARScanner: ARSessionDelegate, ARSCNViewDelegate {
         guard isProcessingFrames else { return }
         captureManager.tryCapture(frame: frame)
 
-        // Capture coordinates every 2 seconds, up to 100 points
-        let currentTime = CACurrentMediaTime()
-        if coordinates.count < 100 && (lastCoordinateCaptureTime == 0 || currentTime - lastCoordinateCaptureTime >= 2.0) {
-            if let location = locationManager.latestLocation {
+        // Capture coordinates when device moves >= 0.5 meters, up to 100 points
+        let currentPosition = simd_float3(
+            frame.camera.transform.columns.3.x,
+            frame.camera.transform.columns.3.y,
+            frame.camera.transform.columns.3.z
+        )
+        if coordinates.count < 100 {
+            var shouldCapture = false
+            if let lastPos = lastCoordinatePosition {
+                let distance = simd_distance(currentPosition, lastPos)
+                if distance >= 0.5 { // Capture if moved 0.5 meters or more
+                    shouldCapture = true
+                }
+            } else {
+                shouldCapture = true // Capture first coordinate
+            }
+
+            if shouldCapture, let location = locationManager.latestLocation {
                 let accuracy = location.horizontalAccuracy
                 if accuracy <= 20 { // Relaxed accuracy threshold
                     let latitude = location.coordinate.latitude
@@ -1047,17 +1061,15 @@ extension ARScanner: ARSessionDelegate, ARSCNViewDelegate {
                     // Validate coordinates
                     if (-90...90).contains(latitude) && (-180...180).contains(longitude) {
                         coordinates.append([latitude, longitude])
-                        coordinateTimestamps.append(currentTime)
-                        lastCoordinateCaptureTime = currentTime
-                        os_log("Captured coordinate: [%f, %f] at time %f", log: OSLog.default, type: .info, latitude, longitude, currentTime)
+                        coordinateTimestamps.append(CACurrentMediaTime())
+                        lastCoordinatePosition = currentPosition
+                        os_log("Captured coordinate: [%f, %f] at position [%f, %f, %f]", log: OSLog.default, type: .info, latitude, longitude, currentPosition.x, currentPosition.y, currentPosition.z)
                     } else {
                         updateStatus("Invalid GPS coordinates detected.", isCritical: false)
                     }
                 } else {
                     updateStatus("Poor GPS signal (accuracy: %fm). Coordinates may be less reliable.", isCritical: false)
                 }
-            } else {
-                updateStatus("No GPS signal available.", isCritical: false)
             }
         }
 
@@ -1831,14 +1843,13 @@ class ScanCaptureManager {
     }
 }
 
+
 @available(iOS 13.4, *)
 class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDocumentPickerDelegate {
     private let sceneView = SCNView()
     private let processButton = UIButton(type: .system)
     private let closeButton = UIButton(type: .system)
     private let backButton = UIButton(type: .system)
-    private let downloadButton = UIButton(type: .system)
-    private let shareButton = UIButton(type: .system)
     private let statusLabel = UILabel()
     private let loadingIndicator = UIActivityIndicatorView(style: .large)
     var capturedMeshes: [CapturedMesh] = []
@@ -1853,7 +1864,7 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         setupFlutterChannel()
         setupUI()
         setupScene()
-        captureAndSaveSnapshot() // Capture snapshot after setting up the scene
+        captureAndSaveSnapshot()
     }
 
     private func captureAndSaveSnapshot() {
@@ -1862,12 +1873,10 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
             return
         }
 
-        // Capture snapshot from SCNView
         let snapshot = sceneView.snapshot()
         var snapshotURL = scanFolderURL.appendingPathComponent("snapshot.png")
         
         do {
-            // Save snapshot as PNG
             if let data = snapshot.pngData() {
                 try data.write(to: snapshotURL)
                 var resourceValues = URLResourceValues()
@@ -1875,14 +1884,13 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                 try snapshotURL.setResourceValues(resourceValues)
                 os_log("Saved snapshot to: %@", log: OSLog.default, type: .info, snapshotURL.path)
                 
-                // Update metadata with snapshot path
                 var metadataURL = scanFolderURL.appendingPathComponent("metadata.json")
                 if FileManager.default.fileExists(atPath: metadataURL.path) {
                     let data = try Data(contentsOf: metadataURL)
                     let decoder = JSONDecoder()
                     decoder.dateDecodingStrategy = .iso8601
                     var metadata = try decoder.decode(ScanMetadata.self, from: data)
-                    metadata.snapshotPath = "snapshot.png" // Store relative path
+                    metadata.snapshotPath = "snapshot.png"
                     
                     let encoder = JSONEncoder()
                     encoder.dateEncodingStrategy = .iso8601
@@ -1912,8 +1920,6 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         view.addSubview(closeButton)
         view.addSubview(backButton)
         view.addSubview(processButton)
-        view.addSubview(downloadButton)
-        view.addSubview(shareButton)
         view.addSubview(statusLabel)
         view.addSubview(loadingIndicator)
         
@@ -1921,12 +1927,9 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         closeButton.translatesAutoresizingMaskIntoConstraints = false
         backButton.translatesAutoresizingMaskIntoConstraints = false
         processButton.translatesAutoresizingMaskIntoConstraints = false
-        downloadButton.translatesAutoresizingMaskIntoConstraints = false
-        shareButton.translatesAutoresizingMaskIntoConstraints = false
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         loadingIndicator.translatesAutoresizingMaskIntoConstraints = false
         
-        // Configure buttons
         closeButton.setImage(UIImage(systemName: "xmark"), for: .normal)
         closeButton.tintColor = .white
         closeButton.backgroundColor = UIColor.black.withAlphaComponent(0.5)
@@ -1945,22 +1948,6 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         processButton.layer.cornerRadius = 10
         processButton.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold)
         processButton.addTarget(self, action: #selector(processTapped), for: .touchUpInside)
-        
-        downloadButton.setTitle("Download", for: .normal)
-        downloadButton.setTitleColor(.white, for: .normal)
-        downloadButton.backgroundColor = UIColor.systemGreen.withAlphaComponent(0.8)
-        downloadButton.layer.cornerRadius = 10
-        downloadButton.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold)
-        downloadButton.addTarget(self, action: #selector(downloadTapped), for: .touchUpInside)
-        downloadButton.isHidden = true
-        
-        shareButton.setTitle("Share", for: .normal)
-        shareButton.setTitleColor(.white, for: .normal)
-        shareButton.backgroundColor = UIColor.systemOrange.withAlphaComponent(0.8)
-        shareButton.layer.cornerRadius = 10
-        shareButton.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold)
-        shareButton.addTarget(self, action: #selector(shareTapped), for: .touchUpInside)
-        shareButton.isHidden = true
         
         statusLabel.text = ""
         statusLabel.textColor = .white
@@ -1995,17 +1982,7 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
             processButton.widthAnchor.constraint(equalToConstant: 100),
             processButton.heightAnchor.constraint(equalToConstant: 44),
             
-            downloadButton.bottomAnchor.constraint(equalTo: processButton.topAnchor, constant: -10),
-            downloadButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -20),
-            downloadButton.widthAnchor.constraint(equalToConstant: 100),
-            downloadButton.heightAnchor.constraint(equalToConstant: 44),
-            
-            shareButton.bottomAnchor.constraint(equalTo: downloadButton.topAnchor, constant: -10),
-            shareButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -20),
-            shareButton.widthAnchor.constraint(equalToConstant: 100),
-            shareButton.heightAnchor.constraint(equalToConstant: 44),
-            
-            statusLabel.bottomAnchor.constraint(equalTo: processButton.topAnchor, constant: -20),
+            statusLabel.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20),
             statusLabel.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
             statusLabel.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
             statusLabel.heightAnchor.constraint(greaterThanOrEqualToConstant: 60),
@@ -2098,7 +2075,6 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                 self.loadingIndicator.stopAnimating()
                 self.statusLabel.text = ""
                 self.endBackgroundTask()
-                // Set status to pending on timeout
                 self.updateScanStatus(to: "pending", for: scanFolderURL)
             }
         }
@@ -2134,20 +2110,18 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                 switch result {
                 case .success(let usdzURL, _):
                     DispatchQueue.main.async {
+                        self.processButton.isHidden = true // Hide process button on success
                         do {
                             let scene = try SCNScene(url: usdzURL, options: nil)
                             self.sceneView.scene = scene
                             self.statusLabel.text = "Model loaded successfully."
                             self.downloadedFileURL = usdzURL
-                            self.downloadButton.isHidden = false
-                            self.shareButton.isHidden = false
                             os_log("✅ Successfully loaded and displayed USDZ model", log: OSLog.default, type: .info)
                             self.channel?.invokeMethod("processingComplete", arguments: ["usdzPath": usdzURL.path]) { result in
                                 if let error = result as? FlutterError {
                                     os_log("Failed to invoke processingComplete: %@", log: OSLog.default, type: .error, error.message ?? "Unknown error")
                                 }
                             }
-                            // Update scan status to "uploaded"
                             let success = ScanLocalStorage.shared.updateScanStatus("uploaded", for: scanFolderURL)
                             if !success {
                                 os_log("⚠️ Failed to update scan status to uploaded", log: OSLog.default, type: .error)
@@ -2156,8 +2130,6 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                         } catch {
                             os_log("❌ Failed to load USDZ model with SceneKit: %@", log: OSLog.default, type: .error, error.localizedDescription)
                             self.downloadedFileURL = usdzURL
-                            self.downloadButton.isHidden = false
-                            self.shareButton.isHidden = false
                             let previewController = QLPreviewController()
                             previewController.dataSource = self
                             self.present(previewController, animated: true) {
@@ -2168,7 +2140,6 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                                         os_log("Failed to invoke processingComplete: %@", log: OSLog.default, type: .error, error.message ?? "Unknown error")
                                     }
                                 }
-                                // Update scan status to "uploaded"
                                 let success = ScanLocalStorage.shared.updateScanStatus("uploaded", for: scanFolderURL)
                                 if !success {
                                     os_log("⚠️ Failed to update scan status to uploaded", log: OSLog.default, type: .error)
@@ -2181,7 +2152,6 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                     DispatchQueue.main.async {
                         self.showErrorAlertWithLink(message: error.message ?? "Unknown error")
                         self.statusLabel.text = "Processing failed."
-                        // Update scan status based on error type
                         let isServerError = ["API_REQUEST_FAILED", "API_STATUS_ERROR", "INVALID_MODEL_URL", "PARSE_FAILED"].contains(error.code)
                         let newStatus = isServerError ? "failed" : "pending"
                         let success = ScanLocalStorage.shared.updateScanStatus(newStatus, for: scanFolderURL)
@@ -2201,7 +2171,6 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                 self.loadingIndicator.stopAnimating()
                 self.statusLabel.text = ""
                 self.endBackgroundTask()
-                // Set status to pending for local errors
                 if let scanFolderURL = self.currentScanFolderURL {
                     let success = ScanLocalStorage.shared.updateScanStatus("pending", for: scanFolderURL)
                     if !success {
@@ -2313,7 +2282,14 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                 }
                 
                 self.modelUrl = modelUrl
-                self.downloadAndDisplayModel(from: modelUrl, scanFolderURL: scanFolderURL, completion: completion)
+                self.downloadAndDisplayModel(from: modelUrl, scanFolderURL: scanFolderURL, completion: { result in
+                    if case .success = result {
+                        DispatchQueue.main.async {
+                            self.processButton.isHidden = true
+                        }
+                    }
+                    completion(result)
+                })
             } catch {
                 os_log("❌ Failed to parse API response: %@", log: OSLog.default, type: .error, error.localizedDescription)
                 completion(.failure(FlutterError(
@@ -2398,7 +2374,6 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                     let usdzSize = usdzAttributes[.size] as? Int64 ?? 0
                     let totalSize = zipSize + usdzSize
                     
-                    // Update metadata with model size and snapshot path
                     var metadataURL = scanFolderURL.appendingPathComponent("metadata.json")
                     if fileManager.fileExists(atPath: metadataURL.path) {
                         let data = try Data(contentsOf: metadataURL)
@@ -2407,7 +2382,7 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                         var metadata = try decoder.decode(ScanMetadata.self, from: data)
                         metadata.modelSizeBytes = totalSize
                         metadata.status = "uploaded"
-                        metadata.snapshotPath = "snapshot.png" // Ensure snapshot path is set
+                        metadata.snapshotPath = "snapshot.png"
                         
                         let encoder = JSONEncoder()
                         encoder.dateEncodingStrategy = .iso8601
@@ -2417,11 +2392,9 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                         try metadataURL.setResourceValues(resourceValues)
                     }
                     
-                    // Try loading in SCNView first
                     do {
                         let scene = try SCNScene(url: usdzURL, options: nil)
                         self.sceneView.scene = scene
-                        // Capture new snapshot after loading USDZ
                         let snapshot = self.sceneView.snapshot()
                         var snapshotURL = scanFolderURL.appendingPathComponent("snapshot.png")
                         if let data = snapshot.pngData() {
@@ -2433,8 +2406,6 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                         DispatchQueue.main.async {
                             self.statusLabel.text = "Model loaded successfully."
                             self.downloadedFileURL = usdzURL
-                            self.downloadButton.isHidden = false
-                            self.shareButton.isHidden = false
                             self.channel?.invokeMethod("processingComplete", arguments: ["usdzPath": usdzURL.path]) { result in
                                 if let error = result as? FlutterError {
                                     os_log("Failed to invoke processingComplete: %@", log: OSLog.default, type: .error, error.message ?? "Unknown error")
@@ -2447,8 +2418,6 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                         let previewController = QLPreviewController()
                         previewController.dataSource = self
                         self.present(previewController, animated: true) {
-                            // Capture snapshot from SCNView (since QLPreviewController doesn’t provide direct snapshot API)
-                            // This captures the last SCNView state; alternatively, we rely on the pre-processed snapshot
                             let snapshot = self.sceneView.snapshot()
                             var snapshotURL = scanFolderURL.appendingPathComponent("snapshot.png")
                             if let data = snapshot.pngData() {
@@ -2459,8 +2428,6 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                             
                             self.statusLabel.text = "Model loaded in Quick Look."
                             self.downloadedFileURL = usdzURL
-                            self.downloadButton.isHidden = false
-                            self.shareButton.isHidden = false
                             self.channel?.invokeMethod("processingComplete", arguments: ["usdzPath": usdzURL.path]) { result in
                                 if let error = result as? FlutterError {
                                     os_log("Failed to invoke processingComplete: %@", log: OSLog.default, type: .error, error.message ?? "Unknown error")
@@ -2491,37 +2458,6 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         task.resume()
     }
     
-    @objc private func downloadTapped() {
-        guard let usdzURL = downloadedFileURL else {
-            showErrorAlert(message: "No USDZ file available to download.")
-            return
-        }
-        
-        let documentPicker = UIDocumentPickerViewController(url: usdzURL, in: .exportToService)
-        documentPicker.delegate = self
-        documentPicker.modalPresentationStyle = .formSheet
-        present(documentPicker, animated: true)
-        generateHapticFeedback()
-    }
-    
-    @objc private func shareTapped() {
-        guard let usdzURL = downloadedFileURL else {
-            showErrorAlert(message: "No USDZ file available to share.")
-            return
-        }
-        
-        let activityController = UIActivityViewController(activityItems: [usdzURL], applicationActivities: nil)
-        activityController.completionWithItemsHandler = { [weak self] _, completed, _, error in
-            if completed {
-                self?.statusLabel.text = "Model shared successfully."
-            } else if let error = error {
-                self?.showErrorAlert(message: "Failed to share model: \(error.localizedDescription)")
-            }
-        }
-        present(activityController, animated: true)
-        generateHapticFeedback()
-    }
-    
     @objc private func closeTapped() {
         channel?.invokeMethod("closeARModule", arguments: nil) { result in
             if let error = result as? FlutterError {
@@ -2549,17 +2485,8 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
     }
     
     private func showErrorAlertWithLink(message: String) {
-        let alert = UIAlertController(
-            title: "Error",
-            message: "\(message)\n\nYou can download the model directly from the browser.",
-            preferredStyle: .alert
-        )
-        alert.addAction(UIAlertAction(title: "Open in Browser", style: .default) { _ in
-            if let url = self.modelUrl {
-                UIApplication.shared.open(url, options: [:])
-            }
-        })
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        let alert = UIAlertController(title: "Error", message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
         present(alert, animated: true)
         generateHapticFeedback(.error)
     }
@@ -2619,6 +2546,7 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         }
     }
 }
+
 @available(iOS 13.4, *)
 protocol ControlPanelDelegate: AnyObject {
     func controlPanelDidTapStart(_ controlPanel: ControlPanel)
@@ -2732,21 +2660,90 @@ class ControlPanel: UIView {
     }
 }
 
-// MARK: - LocationManager
 class LocationManager: NSObject, CLLocationManagerDelegate {
-    let manager = CLLocationManager()
-    var latestLocation: CLLocation?
+    private let locationManager = CLLocationManager()
+    private var coordinates: [[Double]] = []
+    private var coordinateTimestamps: [Date] = []
+    var latestLocation: CLLocation? // Added for latestLocation
+    private let maxCoordinates = 100
+    var permissionStatusHandler: ((CLAuthorizationStatus, Bool) -> Void)? // Updated to include isLocationServicesEnabled
 
     override init() {
         super.init()
-        manager.delegate = self
-        manager.desiredAccuracy = kCLLocationAccuracyBest
-        manager.requestWhenInUseAuthorization()
-        manager.startUpdatingLocation()
+        locationManager.delegate = self
+        locationManager.desiredAccuracy = kCLLocationAccuracyBest
+        locationManager.distanceFilter = 0.5 // Update every 0.5 meters
+    }
+
+    func requestLocationPermission() {
+        let isLocationServicesEnabled = CLLocationManager.locationServicesEnabled()
+        if isLocationServicesEnabled {
+            let status = CLLocationManager.authorizationStatus()
+            if status == .notDetermined {
+                print("Requesting location permission")
+                locationManager.requestWhenInUseAuthorization()
+            } else {
+                print("Location permission status: \(status.rawValue)")
+                permissionStatusHandler?(status, true)
+            }
+        } else {
+            print("Location services are disabled")
+            permissionStatusHandler?(.notDetermined, false)
+        }
+    }
+
+    func startUpdatingLocation() {
+        let status = CLLocationManager.authorizationStatus()
+        if status == .authorizedWhenInUse {
+            print("Starting location updates")
+            locationManager.startUpdatingLocation()
+        } else {
+            print("Cannot start location updates: Permission status is \(status.rawValue)")
+            requestLocationPermission()
+        }
+    }
+
+    func stopUpdatingLocation() {
+        locationManager.stopUpdatingLocation()
+        print("Stopped location updates. Captured \(coordinates.count) coordinates")
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        latestLocation = locations.last
+        guard let location = locations.last, coordinates.count < maxCoordinates else { return }
+        if location.horizontalAccuracy <= 10.0 { // Only use high-accuracy locations
+            let coordinate = [location.coordinate.latitude, location.coordinate.longitude]
+            coordinates.append(coordinate)
+            coordinateTimestamps.append(location.timestamp)
+            latestLocation = location // Store latest location
+            print("Captured coordinate: \(coordinate) at \(location.timestamp)")
+        } else {
+            print("Ignoring low-accuracy location: \(location.horizontalAccuracy)")
+        }
+    }
+
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        print("Location manager failed: \(error.localizedDescription)")
+    }
+
+    func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
+        print("Location authorization changed to: \(status.rawValue)")
+        if status == .authorizedWhenInUse {
+            startUpdatingLocation()
+        } else {
+            permissionStatusHandler?(status, CLLocationManager.locationServicesEnabled())
+        }
+    }
+
+    func getCoordinates() -> [[Double]] {
+        return coordinates
+    }
+
+    func getCoordinateTimestamps() -> [Date] {
+        return coordinateTimestamps
+    }
+
+    func getLatestLocation() -> CLLocation? {
+        return latestLocation
     }
 }
 

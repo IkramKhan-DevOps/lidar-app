@@ -2,8 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 class ModelDetailScreen extends StatefulWidget {
   final Map<String, dynamic> scan;
@@ -25,6 +24,7 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
   String _status = 'pending';
   String _statusMessage = '';
   String? _errorDetails;
+  GoogleMapController? _mapController;
 
   @override
   void initState() {
@@ -41,7 +41,7 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
         'model_size_bytes': widget.scan['modelSizeBytes'] ?? 0,
         'status': widget.scan['status'] ?? 'pending',
         'snapshot_path': widget.scan['snapshotPath'] ?? null,
-        'duration_seconds': 0.0, // Default duration_seconds
+        'duration_seconds': 0.0,
       };
     }
     widget.scan['snapshotPath'] = widget.scan['snapshotPath'] ?? widget.scan['metadata']['snapshot_path'];
@@ -55,6 +55,7 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
   void dispose() {
     _tabController.dispose();
     _nameController.dispose();
+    _mapController?.dispose();
     super.dispose();
   }
 
@@ -78,7 +79,7 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
       setState(() {
         widget.scan['metadata'] = <String, dynamic>{
           ...widget.scan['metadata'],
-          ...metadata, // Merge all metadata fields, including duration_seconds
+          ...metadata,
         };
         _status = status;
         _statusMessage = _getStatusMessage(status);
@@ -171,7 +172,7 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
           _status = 'pending';
           _statusMessage = 'Data has not been processed. Tap to process the model.';
         });
-        await _fetchImagePaths(); // Refresh images for the new scan
+        await _fetchImagePaths();
       }
     } else if (call.method == 'updateProcessingStatus') {
       final status = call.arguments['status']?.toString() ?? 'processing';
@@ -293,18 +294,21 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
         backgroundColor: Colors.black,
         title: const Text('Delete Project', style: TextStyle(color: Colors.white)),
         content: Text(
-            'Are you sure you want to delete "${widget.scan['metadata']['name'] ?? 'Unnamed Scan'}"? This action cannot be undone.',
-            style: const TextStyle(color: Colors.white70)),
+          'Are you sure you want to delete "${widget.scan['metadata']['name'] ?? 'Unnamed Scan'}"? This action cannot be undone.',
+          style: const TextStyle(color: Colors.white70),
+        ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+          ),
           TextButton(
-              onPressed: () async {
-                Navigator.pop(context);
-                await _deleteModel();
-              },
-              child: const Text('Delete', style: TextStyle(color: Colors.red))),
+            onPressed: () async {
+              Navigator.pop(context);
+              await _deleteModel();
+            },
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
         ],
       ),
     );
@@ -335,36 +339,41 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
             hintText: 'Enter project name',
             hintStyle: const TextStyle(color: Colors.white54),
             enabledBorder: OutlineInputBorder(
-                borderSide: const BorderSide(color: Colors.white54),
-                borderRadius: BorderRadius.circular(8)),
+              borderSide: const BorderSide(color: Colors.white54),
+              borderRadius: BorderRadius.circular(8),
+            ),
             focusedBorder: OutlineInputBorder(
-                borderSide: const BorderSide(color: Colors.blue),
-                borderRadius: BorderRadius.circular(8)),
+              borderSide: const BorderSide(color: Colors.blue),
+              borderRadius: BorderRadius.circular(8),
+            ),
           ),
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+          ),
           TextButton(
-              onPressed: () async {
-                final newName = _nameController.text.isEmpty ? 'Unnamed Scan' : _nameController.text;
-                try {
-                  await platform.invokeMethod('updateScanName', {
-                    'folderPath': widget.scan['folderPath'],
-                    'name': newName
-                  });
-                  setState(() {
-                    widget.scan['metadata']['name'] = newName;
-                  });
-                  Navigator.pop(context);
-                } on PlatformException catch (e) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Failed to update name: ${e.message}')));
-                  Navigator.pop(context);
-                }
-              },
-              child: const Text('Save', style: TextStyle(color: Colors.blue))),
+            onPressed: () async {
+              final newName = _nameController.text.isEmpty ? 'Unnamed Scan' : _nameController.text;
+              try {
+                await platform.invokeMethod('updateScanName', {
+                  'folderPath': widget.scan['folderPath'],
+                  'name': newName,
+                });
+                setState(() {
+                  widget.scan['metadata']['name'] = newName;
+                });
+                Navigator.pop(context);
+              } on PlatformException catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Failed to update name: ${e.message}')),
+                );
+                Navigator.pop(context);
+              }
+            },
+            child: const Text('Save', style: TextStyle(color: Colors.blue)),
+          ),
         ],
       ),
     );
@@ -372,48 +381,58 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
 
   Widget _buildMap({bool isFullScreen = false}) {
     final rawCoordinates = widget.scan['metadata']['coordinates'] as List<dynamic>?;
-    if (rawCoordinates == null || rawCoordinates.isEmpty) {
-      return Container(
-        height: isFullScreen ? null : 300,
-        decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            color: Colors.black),
-        child: const Center(
-            child: Text("No location data available.",
-                style: TextStyle(color: Colors.white54, fontSize: 16))),
-      );
-    }
+    final defaultPosition = const LatLng(0.0, 0.0); // Default fallback position
+    const defaultZoom = 2.0; // Low zoom level for world view when no coordinates
 
-    final coordinates = rawCoordinates.map((coord) {
-      if (coord is List<dynamic> && coord.length >= 2) {
-        return [double.tryParse(coord[0].toString()) ?? 0.0, double.tryParse(coord[1].toString()) ?? 0.0];
-      }
-      return null;
-    }).whereType<List<double>>().toList();
+    // Process coordinates if available
+    List<LatLng> points = [];
+    Map<String, LatLng>? bounds;
+    LatLng center = defaultPosition;
+    double zoom = defaultZoom;
 
-    final points = coordinates.map((coord) {
-      if (coord.length >= 2 && coord[0] is double && coord[1] is double) {
-        return LatLng(coord[0], coord[1]);
-      } else {
+    if (rawCoordinates != null && rawCoordinates.isNotEmpty) {
+      final coordinates = rawCoordinates
+          .map((coord) {
+        if (coord is List<dynamic> && coord.length >= 2) {
+          return [double.tryParse(coord[0].toString()) ?? 0.0, double.tryParse(coord[1].toString()) ?? 0.0];
+        }
         return null;
-      }
-    }).whereType<LatLng>().toList();
+      })
+          .whereType<List<double>>()
+          .toList();
 
-    if (points.isEmpty) {
-      return Container(
-        height: isFullScreen ? null : 300,
-        decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            color: Colors.black),
-        child: const Center(
-            child: Text("Invalid location data.",
-                style: TextStyle(color: Colors.white54, fontSize: 16))),
-      );
+      points = coordinates
+          .map((coord) => LatLng(coord[0], coord[1]))
+          .where((point) => point.latitude != 0.0 && point.longitude != 0.0)
+          .toList();
+
+      if (points.isNotEmpty) {
+        bounds = _calculateBounds(points);
+        center = bounds['center'] as LatLng;
+        zoom = 15.0;
+      }
     }
 
-    final bounds = LatLngBounds.fromPoints(points);
-    final center = bounds.center;
-    const zoom = 15.0;
+    final polylines = points.isNotEmpty
+        ? <Polyline>{
+      Polyline(
+        polylineId: const PolylineId('scan_path'),
+        points: points,
+        color: Colors.blue,
+        width: 4,
+      ),
+    }
+        : <Polyline>{};
+
+    final markers = points.isNotEmpty
+        ? <Marker>{
+      Marker(
+        markerId: const MarkerId('start_point'),
+        position: points.first,
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+      ),
+    }
+        : <Marker>{};
 
     return Stack(
       children: [
@@ -421,60 +440,100 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
           borderRadius: BorderRadius.circular(12),
           child: SizedBox(
             height: isFullScreen ? null : 300,
-            child: FlutterMap(
-              options: MapOptions(
-                  center: center,
-                  zoom: zoom,
-                  minZoom: 10.0,
-                  maxZoom: 18.0,
-                  interactiveFlags: InteractiveFlag.all & ~InteractiveFlag.rotate),
-              children: [
-                TileLayer(
-                  urlTemplate: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  subdomains: const ['a', 'b', 'c'],
-                  userAgentPackageName: 'com.example.platform_channel_swift_demo',
-                ),
-                PolylineLayer(
-                  polylines: [
-                    Polyline(
-                        points: points,
-                        strokeWidth: 4.0,
-                        color: Colors.blue)
-                  ],
-                ),
-                MarkerLayer(
-                  markers: [
-                    if (points.isNotEmpty)
-                      Marker(
-                          point: points.first,
-                          width: 40.0,
-                          height: 40.0,
-                          child: const Icon(
-                              Icons.location_pin,
-                              color: Colors.red,
-                              size: 40.0))
-                  ],
-                ),
-              ],
+            child: GoogleMap(
+              onMapCreated: (GoogleMapController controller) {
+                _mapController = controller;
+                if (points.isNotEmpty && bounds != null) {
+                  _mapController?.animateCamera(
+                    CameraUpdate.newLatLngBounds(
+                      LatLngBounds(
+                        southwest: bounds['southwest'] as LatLng,
+                        northeast: bounds['northeast'] as LatLng,
+                      ),
+                      50.0,
+                    ),
+                  );
+                } else {
+                  _mapController?.animateCamera(
+                    CameraUpdate.newCameraPosition(
+                      CameraPosition(target: center, zoom: zoom),
+                    ),
+                  );
+                }
+              },
+              initialCameraPosition: CameraPosition(
+                target: center,
+                zoom: zoom,
+              ),
+              polylines: points.isNotEmpty ? polylines : <Polyline>{},
+              markers: points.isNotEmpty ? markers : <Marker>{},
+              myLocationEnabled: true,
+              myLocationButtonEnabled: true,
+              zoomControlsEnabled: false,
+              mapType: MapType.normal,
             ),
           ),
         ),
-        if (!isFullScreen)
+        if (!isFullScreen && points.isEmpty)
+          Positioned(
+            top: 8,
+            left: 8,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.7),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Text(
+                'No location data available due to low GPS accuracy',
+                style: TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+            ),
+          ),
+        if (!isFullScreen && points.isNotEmpty)
           Positioned(
             bottom: 8,
             right: 8,
             child: FloatingActionButton(
-                mini: true,
-                backgroundColor: Colors.blue,
-                onPressed: () {
-                  setState(() {
-                    _isFullScreenMap = true;
-                  });
-                },
-                child: const Icon(Icons.fullscreen, size: 20)),
+              mini: true,
+              backgroundColor: Colors.blue,
+              onPressed: () {
+                setState(() {
+                  _isFullScreenMap = true;
+                });
+              },
+              child: const Icon(Icons.fullscreen, size: 20),
+            ),
           ),
       ],
     );
+  }
+
+  Map<String, LatLng> _calculateBounds(List<LatLng> points) {
+    double minLat = points.first.latitude;
+    double maxLat = points.first.latitude;
+    double minLng = points.first.longitude;
+    double maxLng = points.first.longitude;
+
+    for (var point in points) {
+      if (point.latitude < minLat) minLat = point.latitude;
+      if (point.latitude > maxLat) maxLat = point.latitude;
+      if (point.longitude < minLng) minLng = point.longitude;
+      if (point.longitude > maxLng) maxLng = point.longitude;
+    }
+
+    final southwest = LatLng(minLat, minLng);
+    final northeast = LatLng(maxLat, maxLng);
+    final center = LatLng(
+      (minLat + maxLat) / 2,
+      (minLng + maxLng) / 2,
+    );
+
+    return {
+      'southwest': southwest,
+      'northeast': northeast,
+      'center': center,
+    };
   }
 
   Widget _buildScanDetailsCard() {
@@ -591,16 +650,6 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
                         ),
                         textAlign: TextAlign.center,
                       ),
-                      if (status == 'failed' && _errorDetails != null && _errorDetails!.contains('modelUrl'))
-                        TextButton(
-                          onPressed: () async {
-                            final modelUrl = RegExp(r'modelUrl:\s*(https?://[^\s]+)').firstMatch(_errorDetails!)?.group(1);
-                            if (modelUrl != null) {
-                              await platform.invokeMethod('openUrl', {'url': modelUrl});
-                            }
-                          },
-                          child: const Text('Download from Browser', style: TextStyle(color: Colors.blue, fontSize: 14)),
-                        ),
                     ],
                   ),
                 ),
@@ -696,6 +745,12 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
 
   @override
   Widget build(BuildContext context) {
+    final rawCoordinates = widget.scan['metadata']['coordinates'] as List<dynamic>?;
+    final hasValidCoordinates = rawCoordinates != null && rawCoordinates.isNotEmpty &&
+        rawCoordinates.any((coord) => coord is List<dynamic> && coord.length >= 2 &&
+            double.tryParse(coord[0].toString()) != null && double.tryParse(coord[1].toString()) != null &&
+            double.tryParse(coord[0].toString()) != 0.0 && double.tryParse(coord[1].toString()) != 0.0);
+
     return Scaffold(
       backgroundColor: Colors.grey[900],
       body: SafeArea(
@@ -708,22 +763,31 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
                   child: Row(
                     children: [
                       IconButton(
-                          icon: const Icon(Icons.arrow_back_ios, color: Colors.white, size: 20),
-                          onPressed: () => Navigator.pop(context)),
-                      const Text("PROJECT",
-                          style: TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.bold)),
+                        icon: const Icon(Icons.arrow_back_ios, color: Colors.white, size: 20),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                      const Text(
+                        "PROJECT",
+                        style: TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.bold),
+                      ),
                       const Spacer(),
                       PopupMenuButton<String>(
                         icon: const Icon(Icons.more_horiz, color: Colors.white, size: 24),
                         onSelected: (value) {
                           if (value == 'delete') _showDeleteConfirmationDialog();
                         },
-                        itemBuilder: (context) =>
-                        [const PopupMenuItem(value: 'delete', child: Text('Delete', style: TextStyle(color: Colors.red)))],
+                        itemBuilder: (context) => [
+                          const PopupMenuItem(
+                            value: 'delete',
+                            child: Text('Delete', style: TextStyle(color: Colors.red)),
+                          ),
+                        ],
                       ),
                       const SizedBox(width: 12),
                       IconButton(
-                          icon: const Icon(Icons.close, color: Colors.white, size: 20), onPressed: () => Navigator.pop(context)),
+                        icon: const Icon(Icons.close, color: Colors.white, size: 20),
+                        onPressed: () => Navigator.pop(context),
+                      ),
                     ],
                   ),
                 ),
@@ -735,25 +799,38 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
                       Row(
                         children: [
                           Expanded(
-                              child: Text(widget.scan['metadata']['name'] ?? 'Unnamed Scan',
-                                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
-                                  overflow: TextOverflow.ellipsis)),
+                            child: Text(
+                              widget.scan['metadata']['name'] ?? 'Unnamed Scan',
+                              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
                           const SizedBox(width: 8),
                           IconButton(
-                              icon: const Icon(Icons.edit, size: 20, color: Colors.white60), onPressed: _showEditNameDialog),
+                            icon: const Icon(Icons.edit, size: 20, color: Colors.white60),
+                            onPressed: _showEditNameDialog,
+                          ),
                         ],
                       ),
                       const SizedBox(height: 6),
-                      Text(_formatTimestamp(widget.scan['metadata']['timestamp']),
-                          style: const TextStyle(color: Colors.white54, fontSize: 14)),
+                      Text(
+                        _formatTimestamp(widget.scan['metadata']['timestamp']),
+                        style: const TextStyle(color: Colors.white54, fontSize: 14),
+                      ),
                       const SizedBox(height: 6),
                       Row(
                         children: [
                           const Icon(Icons.location_pin, color: Colors.white54, size: 20),
                           const SizedBox(width: 6),
                           Flexible(
-                              child: Text(widget.scan['metadata']['location_name'] ?? 'Unknown Location',
-                                  style: const TextStyle(color: Colors.white, fontSize: 16), overflow: TextOverflow.ellipsis)),
+                            child: Text(
+                              hasValidCoordinates
+                                  ? (widget.scan['metadata']['location_name'] ?? 'Unknown Location')
+                                  : 'No location data available due to low GPS accuracy',
+                              style: const TextStyle(color: Colors.white, fontSize: 16),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
                         ],
                       ),
                     ],
@@ -767,7 +844,11 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
                   unselectedLabelColor: Colors.white54,
                   labelStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                   unselectedLabelStyle: const TextStyle(fontSize: 16),
-                  tabs: const [Tab(text: 'Overview'), Tab(text: '3D View'), Tab(text: 'Images')],
+                  tabs: const [
+                    Tab(text: 'Overview'),
+                    Tab(text: '3D View'),
+                    Tab(text: 'Images'),
+                  ],
                 ),
                 Expanded(
                   child: IntrinsicHeight(
@@ -797,19 +878,35 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
                           ),
                         ),
                         imagePaths.isEmpty
-                            ? Center(child: Text("No images to display.", style: TextStyle(color: Colors.white54)))
+                            ? const Center(
+                          child: Text(
+                            "No images to display.",
+                            style: TextStyle(color: Colors.white54),
+                          ),
+                        )
                             : Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 8),
                           child: GridView.builder(
                             padding: const EdgeInsets.only(bottom: 16),
                             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                                crossAxisCount: 3, crossAxisSpacing: 8, mainAxisSpacing: 8),
+                              crossAxisCount: 3,
+                              crossAxisSpacing: 8,
+                              mainAxisSpacing: 8,
+                            ),
                             itemCount: imagePaths.length,
                             itemBuilder: (context, index) => Container(
-                              decoration:
-                              BoxDecoration(border: Border.all(color: Colors.white12), borderRadius: BorderRadius.circular(8)),
-                              child: Image.file(File(imagePaths[index]), fit: BoxFit.cover,
-                                  errorBuilder: (context, error, stackTrace) => const Icon(Icons.error, color: Colors.red)),
+                              decoration: BoxDecoration(
+                                border: Border.all(color: Colors.white12),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Image.file(
+                                File(imagePaths[index]),
+                                fit: BoxFit.cover,
+                                errorBuilder: (context, error, stackTrace) => const Icon(
+                                  Icons.error,
+                                  color: Colors.red,
+                                ),
+                              ),
                             ),
                           ),
                         ),
@@ -829,12 +926,13 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
                       children: [
                         _buildMap(isFullScreen: true),
                         Positioned(
-                            top: 16,
-                            left: 16,
-                            child: IconButton(
-                              icon: const Icon(Icons.close, color: Colors.white, size: 30),
-                              onPressed: () => setState(() => _isFullScreenMap = false),
-                            )),
+                          top: 16,
+                          left: 16,
+                          child: IconButton(
+                            icon: const Icon(Icons.close, color: Colors.white, size: 30),
+                            onPressed: () => setState(() => _isFullScreenMap = false),
+                          ),
+                        ),
                       ],
                     ),
                   ),
