@@ -8,6 +8,7 @@ import SSZipArchive
 import Vision
 import CoreLocation
 import simd
+import Network
 import QuickLook
 
 struct ScanMetadata: Codable {
@@ -1265,7 +1266,7 @@ extension ARCamera.TrackingState: CustomStringConvertible {
 class ScanViewController: UIViewController {
     private let arScanner = ARScanner()
     let captureManager = ScanCaptureManager()
-    private let controlPanel = ControlPanel()
+    let controlPanel = ControlPanel()
     private let closeButton = UIButton(type: .system)
     private var activityIndicator: UIActivityIndicatorView?
     private var isPresentingPreview: Bool = false
@@ -1563,11 +1564,15 @@ extension ScanViewController: ControlPanelDelegate {
 }
 
 protocol ScanCaptureManagerDelegate: AnyObject {
+    @available(iOS 13.4, *)
     func scanCaptureManagerReachedStorageLimit(_ manager: ScanCaptureManager)
+    @available(iOS 13.4, *)
     func scanCaptureManager(_ manager: ScanCaptureManager, didUpdateStatus status: String)
+    @available(iOS 13.4, *)
     func scanCaptureManager(_ manager: ScanCaptureManager, didCaptureImage count: Int)
 }
 
+@available(iOS 13.4, *)
 class ScanCaptureManager {
     private let fileManager = FileManager.default
     var captureFolderURL: URL
@@ -1584,7 +1589,8 @@ class ScanCaptureManager {
         category: "ScanCapture"
     )
 
-    private let maxStorageMB: Int = 500
+    private let maxStorageMB: Int = 200 // Set to 200 MB
+
     private var currentStorageSize: Int64 = 0
 
     weak var delegate: ScanCaptureManagerDelegate?
@@ -1682,7 +1688,7 @@ class ScanCaptureManager {
         if qualityDelta < -0.2 {
             optimalFrameInterval = max(baseInterval / 2, 5)
             delegate?.scanCaptureManager(self, didUpdateStatus: "Increased capture rate - quality dropped")
-        } else if qualityDelta > 0.2 {
+        } else if (qualityDelta > 0.2) {
             optimalFrameInterval = min(baseInterval * 2, 30)
             delegate?.scanCaptureManager(self, didUpdateStatus: "Decreased capture rate - quality improved")
         }
@@ -1837,12 +1843,20 @@ class ScanCaptureManager {
         let maxBytes = Int64(maxStorageMB) * 1_048_576
         guard currentStorageSize > maxBytes else { return }
 
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.delegate?.scanCaptureManager(self, didUpdateStatus: "Storage limit of 200 MB reached. Stopping scan...")
+            if let scanViewController = self.delegate as? ScanViewController {
+                if #available(iOS 13.4, *) {
+                    scanViewController.controlPanelDidTapStop(scanViewController.controlPanel)
+                } else {
+                    // Fallback on earlier versions
+                }
+            }
             self.delegate?.scanCaptureManagerReachedStorageLimit(self)
         }
     }
 }
-
 
 @available(iOS 13.4, *)
 class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDocumentPickerDelegate {
@@ -1858,13 +1872,46 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var modelUrl: URL?
     private var downloadedFileURL: URL?
+    private let networkMonitor = NWPathMonitor()
+    private var isNetworkAvailable = false
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        setupNetworkMonitor()
         setupFlutterChannel()
-        setupUI()
+        if #available(iOS 16.0, *) {
+            setupUI()
+        } else {
+            // Fallback on earlier versions
+        }
         setupScene()
         captureAndSaveSnapshot()
+        updateProcessButtonVisibility()
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        updateProcessButtonVisibility()
+    }
+
+    private func setupNetworkMonitor() {
+        networkMonitor.pathUpdateHandler = { [weak self] (path: NWPath) in
+            DispatchQueue.main.async {
+                self?.isNetworkAvailable = path.status == .satisfied
+                self?.updateProcessButtonVisibility()
+            }
+        }
+        let queue = DispatchQueue(label: "NetworkMonitor")
+        networkMonitor.start(queue: queue)
+    }
+
+    private func updateProcessButtonVisibility() {
+        processButton.isHidden = !isNetworkAvailable
+        if !isNetworkAvailable {
+            statusLabel.text = "No internet connection. Please connect to Wi-Fi or cellular data."
+        } else if statusLabel.text == "No internet connection. Please connect to Wi-Fi or cellular data." {
+            statusLabel.text = ""
+        }
     }
 
     private func captureAndSaveSnapshot() {
@@ -1914,6 +1961,7 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         }
     }
     
+    @available(iOS 16.0, *)
     private func setupUI() {
         view.backgroundColor = .black
         view.addSubview(sceneView)
@@ -2053,11 +2101,15 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         return geometry
     }
     
+    @available(iOS 16.0, *)
     @objc private func processTapped() {
         guard let scanFolderURL = currentScanFolderURL else {
-            showErrorAlert(message: "No scan folder available for processing.")
+            showErrorAlert(message: "We couldn't find the scan data. Please try again or restart the scan.")
             return
         }
+        
+        // Disable screen locking
+        UIApplication.shared.isIdleTimerDisabled = true
         
         processButton.isEnabled = false
         processButton.setTitle("Processing...", for: .normal)
@@ -2069,13 +2121,15 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
             guard let self = self else { return }
             os_log("⚠️ Background task expired", log: OSLog.default, type: .error)
             DispatchQueue.main.async {
-                self.showErrorAlert(message: "Processing timed out due to app suspension. Please try again.")
+                self.showErrorAlert(message: "Processing took too long and was interrupted. Please try again.")
                 self.processButton.isEnabled = true
                 self.processButton.setTitle("Process", for: .normal)
                 self.loadingIndicator.stopAnimating()
                 self.statusLabel.text = ""
                 self.endBackgroundTask()
                 self.updateScanStatus(to: "pending", for: scanFolderURL)
+                // Re-enable screen locking
+                UIApplication.shared.isIdleTimerDisabled = false
             }
         }
         
@@ -2090,7 +2144,7 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
             let estimatedMinutes = (zipSizeMB / 50.0) * 2.0
             let estimatedTimeText = String(format: "%.1f", estimatedMinutes)
             DispatchQueue.main.async {
-                self.statusLabel.text = String(format: "ZIP file created (%.2f MB). Processing may take ~%@ minutes...", zipSizeMB, estimatedTimeText)
+                self.statusLabel.text = String(format: "Preparing scan file (%.2f MB). This may take about %@ minutes...", zipSizeMB, estimatedTimeText)
             }
             
             channel?.invokeMethod("updateProcessingStatus", arguments: ["status": "processing"])
@@ -2098,6 +2152,8 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
             processZipFile(at: zipURL) { [weak self] result in
                 guard let self = self else {
                     self?.endBackgroundTask()
+                    // Re-enable screen locking
+                    UIApplication.shared.isIdleTimerDisabled = false
                     return
                 }
                 
@@ -2105,6 +2161,8 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                     self.processButton.isEnabled = true
                     self.processButton.setTitle("Process", for: .normal)
                     self.loadingIndicator.stopAnimating()
+                    // Re-enable screen locking
+                    UIApplication.shared.isIdleTimerDisabled = false
                 }
                 
                 switch result {
@@ -2114,7 +2172,7 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                         do {
                             let scene = try SCNScene(url: usdzURL, options: nil)
                             self.sceneView.scene = scene
-                            self.statusLabel.text = "Model loaded successfully."
+                            self.statusLabel.text = "Your model is ready!"
                             self.downloadedFileURL = usdzURL
                             os_log("✅ Successfully loaded and displayed USDZ model", log: OSLog.default, type: .info)
                             self.channel?.invokeMethod("processingComplete", arguments: ["usdzPath": usdzURL.path]) { result in
@@ -2133,7 +2191,7 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                             let previewController = QLPreviewController()
                             previewController.dataSource = self
                             self.present(previewController, animated: true) {
-                                self.statusLabel.text = "Model loaded in Quick Look."
+                                self.statusLabel.text = "Your model is ready in Quick Look!"
                                 os_log("✅ Loaded USDZ model in QLPreviewController", log: OSLog.default, type: .info)
                                 self.channel?.invokeMethod("processingComplete", arguments: ["usdzPath": usdzURL.path]) { result in
                                     if let error = result as? FlutterError {
@@ -2150,8 +2208,8 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                     }
                 case .failure(let error, let modelUrl):
                     DispatchQueue.main.async {
-                        self.showErrorAlertWithLink(message: error.message ?? "Unknown error")
-                        self.statusLabel.text = "Processing failed."
+                        self.showErrorAlertWithLink(message: self.userFriendlyErrorMessage(for: error, modelUrl: modelUrl))
+                        self.statusLabel.text = "We couldn't process your scan."
                         let isServerError = ["API_REQUEST_FAILED", "API_STATUS_ERROR", "INVALID_MODEL_URL", "PARSE_FAILED"].contains(error.code)
                         let newStatus = isServerError ? "failed" : "pending"
                         let success = ScanLocalStorage.shared.updateScanStatus(newStatus, for: scanFolderURL)
@@ -2165,12 +2223,14 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         } catch {
             os_log("❌ Failed to process: %@", log: OSLog.default, type: .error, error.localizedDescription)
             DispatchQueue.main.async {
-                self.showErrorAlert(message: error.localizedDescription)
+                self.showErrorAlert(message: "The scan file is missing. Please try scanning again.")
                 self.processButton.isEnabled = true
                 self.processButton.setTitle("Process", for: .normal)
                 self.loadingIndicator.stopAnimating()
                 self.statusLabel.text = ""
                 self.endBackgroundTask()
+                // Re-enable screen locking
+                UIApplication.shared.isIdleTimerDisabled = false
                 if let scanFolderURL = self.currentScanFolderURL {
                     let success = ScanLocalStorage.shared.updateScanStatus("pending", for: scanFolderURL)
                     if !success {
@@ -2186,32 +2246,77 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         case failure(FlutterError, URL?)
     }
     
+    @available(iOS 16.0, *)
+    private func userFriendlyErrorMessage(for error: FlutterError, modelUrl: URL?) -> String {
+        switch error.code {
+        case "NO_SCAN_FOLDER":
+            return "We couldn't find the scan data. Please try again or restart the scan."
+        case "FILE_NOT_FOUND":
+            return "The scan file is missing. Please try scanning again."
+        case "FILE_READ_ERROR":
+            return "We had trouble reading the scan file. Please try again."
+        case "CONTROLLER_DEALLOCATED":
+            return "Something went wrong. Please restart the app and try again."
+        case "API_REQUEST_FAILED":
+            return "We couldn't connect to the server. Please check your internet and try again."
+        case "API_STATUS_ERROR":
+            return "The server had an issue (code \(error.message?.split(separator: ": ").last ?? "unknown")). Please try again later."
+        case "NO_DATA":
+            return "The server didn't send back any data. Please try again."
+        case "INVALID_MODEL_URL":
+            return "The server sent an invalid link for your model. Please try again."
+        case "PARSE_FAILED":
+            return "We couldn't understand the server's response. Please try again."
+        case "DOWNLOAD_FAILED":
+            return "We couldn't download your model. Please check your internet and try again."
+        case "DOWNLOAD_STATUS_ERROR":
+            return "The server had a problem sending your model (code \(error.message?.split(separator: ": ").last ?? "unknown")). Please try again later."
+        case "NO_FILE_URL":
+            return "We couldn't find the downloaded model file. Please try again."
+        case "INVALID_USDZ":
+            return "The model file isn't valid. Please try processing again."
+        case "SAVE_FAILED":
+            return "We had trouble saving your model. Please try again."
+        default:
+            return "Something went wrong. Please try again or contact support."
+        }
+    }
+    
     func processZipFile(at zipURL: URL, completion: @escaping (ProcessingResult) -> Void) {
         guard let scanFolderURL = currentScanFolderURL else {
-            completion(.failure(FlutterError(
-                code: "NO_SCAN_FOLDER",
-                message: "No scan folder available for processing.",
-                details: nil
-            ), nil))
+            DispatchQueue.main.async {
+                UIApplication.shared.isIdleTimerDisabled = false
+                completion(.failure(FlutterError(
+                    code: "NO_SCAN_FOLDER",
+                    message: "No scan folder available for processing",
+                    details: nil
+                ), nil))
+            }
             return
         }
         
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: zipURL.path) else {
-            completion(.failure(FlutterError(
-                code: "FILE_NOT_FOUND",
-                message: "ZIP file not found at \(zipURL.path)",
-                details: nil
-            ), nil))
+            DispatchQueue.main.async {
+                UIApplication.shared.isIdleTimerDisabled = false
+                completion(.failure(FlutterError(
+                    code: "FILE_NOT_FOUND",
+                    message: "Scan data file not found",
+                    details: nil
+                ), nil))
+            }
             return
         }
         
         guard let zipData = try? Data(contentsOf: zipURL) else {
-            completion(.failure(FlutterError(
-                code: "FILE_READ_ERROR",
-                message: "Failed to read ZIP file",
-                details: nil
-            ), nil))
+            DispatchQueue.main.async {
+                UIApplication.shared.isIdleTimerDisabled = false
+                completion(.failure(FlutterError(
+                    code: "FILE_READ_ERROR",
+                    message: "Failed to read scan data file",
+                    details: nil
+                ), nil))
+            }
             return
         }
         
@@ -2227,84 +2332,127 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         
         channel?.invokeMethod("updateProcessingStatus", arguments: ["status": "uploading"])
         
-        let task = session.dataTask(with: request) { [weak self] data, response, error in
-            guard let self = self else {
-                completion(.failure(FlutterError(
-                    code: "CONTROLLER_DEALLOCATED",
-                    message: "ModelViewController deallocated during processing",
-                    details: nil
-                ), nil))
-                return
-            }
-            
-            if let error = error {
-                os_log("❌ API request failed: %@", log: OSLog.default, type: .error, error.localizedDescription)
-                completion(.failure(FlutterError(
-                    code: "API_REQUEST_FAILED",
-                    message: "API request failed: \(error.localizedDescription)",
-                    details: nil
-                ), nil))
-                return
-            }
-            
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-                os_log("❌ API returned non-200 status: %d", log: OSLog.default, type: .error, statusCode)
-                completion(.failure(FlutterError(
-                    code: "API_STATUS_ERROR",
-                    message: "API returned status code: \(statusCode)",
-                    details: nil
-                ), nil))
-                return
-            }
-            
-            guard let data = data else {
-                os_log("❌ No data received from API", log: OSLog.default, type: .error)
-                completion(.failure(FlutterError(
-                    code: "NO_DATA",
-                    message: "No data received from API",
-                    details: nil
-                ), nil))
-                return
-            }
-            
-            do {
-                let json = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any]
-                guard let modelUrlString = json?["modelUrl"] as? String,
-                      let modelUrl = URL(string: modelUrlString) else {
-                    os_log("❌ Invalid model URL in response", log: OSLog.default, type: .error)
-                    completion(.failure(FlutterError(
-                        code: "INVALID_MODEL_URL",
-                        message: "Invalid model URL in response",
-                        details: nil
-                    ), nil))
+        func attemptUpload(attempt: Int = 1, maxAttempts: Int = 3) {
+            let task = session.dataTask(with: request) { [weak self] data, response, error in
+                guard let self = self else {
+                    DispatchQueue.main.async {
+                        UIApplication.shared.isIdleTimerDisabled = false
+                        completion(.failure(FlutterError(
+                            code: "CONTROLLER_DEALLOCATED",
+                            message: "Processing interrupted",
+                            details: nil
+                        ), nil))
+                    }
                     return
                 }
                 
-                self.modelUrl = modelUrl
-                self.downloadAndDisplayModel(from: modelUrl, scanFolderURL: scanFolderURL, completion: { result in
-                    if case .success = result {
-                        DispatchQueue.main.async {
-                            self.processButton.isHidden = true
-                        }
+                if let error = error {
+                    os_log("❌ API request failed: %@", log: OSLog.default, type: .error, error.localizedDescription)
+                    DispatchQueue.main.async {
+                        UIApplication.shared.isIdleTimerDisabled = false
+                        completion(.failure(FlutterError(
+                            code: "API_REQUEST_FAILED",
+                            message: "Network error occurred",
+                            details: error.localizedDescription
+                        ), nil))
                     }
-                    completion(result)
-                })
-            } catch {
-                os_log("❌ Failed to parse API response: %@", log: OSLog.default, type: .error, error.localizedDescription)
-                completion(.failure(FlutterError(
-                    code: "PARSE_FAILED",
-                    message: "Failed to parse API response: \(error.localizedDescription)",
-                    details: nil
-                ), nil))
+                    return
+                }
+                
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    os_log("❌ Invalid response from API", log: OSLog.default, type: .error)
+                    DispatchQueue.main.async {
+                        UIApplication.shared.isIdleTimerDisabled = false
+                        completion(.failure(FlutterError(
+                            code: "INVALID_RESPONSE",
+                            message: "Invalid response from server",
+                            details: nil
+                        ), nil))
+                    }
+                    return
+                }
+                
+                if httpResponse.statusCode != 200 {
+                    let statusCode = httpResponse.statusCode
+                    os_log("❌ API returned non-200 status: %d", log: OSLog.default, type: .error, statusCode)
+                    if statusCode == 500 && attempt < maxAttempts {
+                        os_log("Retrying API request (attempt %d of %d)", log: OSLog.default, type: .info, attempt + 1, maxAttempts)
+                        DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) {
+                            attemptUpload(attempt: attempt + 1, maxAttempts: maxAttempts)
+                        }
+                        return
+                    }
+                    DispatchQueue.main.async {
+                        UIApplication.shared.isIdleTimerDisabled = false
+                        completion(.failure(FlutterError(
+                            code: "API_STATUS_ERROR",
+                            message: statusCode == 500 ? "Server error occurred" : "API request failed with status: \(statusCode)",
+                            details: nil
+                        ), nil))
+                    }
+                    return
+                }
+                
+                guard let data = data else {
+                    os_log("❌ No data received from API", log: OSLog.default, type: .error)
+                    DispatchQueue.main.async {
+                        UIApplication.shared.isIdleTimerDisabled = false
+                        completion(.failure(FlutterError(
+                            code: "NO_DATA",
+                            message: "No data received from server",
+                            details: nil
+                        ), nil))
+                    }
+                    return
+                }
+                
+                do {
+                    let json = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any]
+                    guard let modelUrlString = json?["modelUrl"] as? String,
+                          let modelUrl = URL(string: modelUrlString) else {
+                        os_log("❌ Invalid model URL in response", log: OSLog.default, type: .error)
+                        DispatchQueue.main.async {
+                            UIApplication.shared.isIdleTimerDisabled = false
+                            completion(.failure(FlutterError(
+                                code: "INVALID_MODEL_URL",
+                                message: "Invalid model data received",
+                                details: nil
+                            ), nil))
+                        }
+                        return
+                    }
+                    
+                    self.modelUrl = modelUrl
+                    self.downloadAndDisplayModel(from: modelUrl, scanFolderURL: scanFolderURL, completion: { result in
+                        if case .success = result {
+                            DispatchQueue.main.async {
+                                self.processButton.isHidden = true
+                                UIApplication.shared.isIdleTimerDisabled = false
+                            }
+                        }
+                        completion(result)
+                    })
+                } catch {
+                    os_log("❌ Failed to parse API response: %@", log: OSLog.default, type: .error, error.localizedDescription)
+                    DispatchQueue.main.async {
+                        UIApplication.shared.isIdleTimerDisabled = false
+                        completion(.failure(FlutterError(
+                            code: "PARSE_FAILED",
+                            message: "Failed to process server response",
+                            details: nil
+                        ), nil))
+                    }
+                }
             }
+            task.resume()
         }
-        task.resume()
+        
+        attemptUpload()
     }
     
     private func downloadAndDisplayModel(from modelUrl: URL, scanFolderURL: URL, completion: @escaping (ProcessingResult) -> Void) {
         DispatchQueue.main.async {
-            self.statusLabel.text = "Downloading model..."
+            self.statusLabel.text = "Downloading your model..."
             self.loadingIndicator.startAnimating()
         }
         
@@ -2321,11 +2469,15 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                     message: "ModelViewController deallocated during download",
                     details: nil
                 ), modelUrl))
+                // Re-enable screen locking
+                UIApplication.shared.isIdleTimerDisabled = false
                 return
             }
             
             DispatchQueue.main.async {
                 self.loadingIndicator.stopAnimating()
+                // Re-enable screen locking
+                UIApplication.shared.isIdleTimerDisabled = false
             }
             
             if let error = error {
@@ -2404,7 +2556,7 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                         }
                         
                         DispatchQueue.main.async {
-                            self.statusLabel.text = "Model loaded successfully."
+                            self.statusLabel.text = "Your model is ready!"
                             self.downloadedFileURL = usdzURL
                             self.channel?.invokeMethod("processingComplete", arguments: ["usdzPath": usdzURL.path]) { result in
                                 if let error = result as? FlutterError {
@@ -2426,7 +2578,7 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
                                 os_log("Replaced snapshot for QLPreview: %@", log: OSLog.default, type: .info, snapshotURL.path)
                             }
                             
-                            self.statusLabel.text = "Model loaded in Quick Look."
+                            self.statusLabel.text = "Your model is ready in Quick Look!"
                             self.downloadedFileURL = usdzURL
                             self.channel?.invokeMethod("processingComplete", arguments: ["usdzPath": usdzURL.path]) { result in
                                 if let error = result as? FlutterError {
@@ -2478,14 +2630,14 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
     }
     
     private func showErrorAlert(message: String) {
-        let alert = UIAlertController(title: "Error", message: message, preferredStyle: .alert)
+        let alert = UIAlertController(title: "Oops, something went wrong", message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default))
         present(alert, animated: true)
         generateHapticFeedback(.error)
     }
     
     private func showErrorAlertWithLink(message: String) {
-        let alert = UIAlertController(title: "Error", message: message, preferredStyle: .alert)
+        let alert = UIAlertController(title: "Oops, something went wrong", message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default))
         present(alert, animated: true)
         generateHapticFeedback(.error)

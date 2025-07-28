@@ -25,6 +25,7 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
   String _statusMessage = '';
   String? _errorDetails;
   GoogleMapController? _mapController;
+  bool _hasShownNoGpsMessage = false;
 
   @override
   void initState() {
@@ -110,7 +111,7 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
       case 'uploaded':
         return 'Tap to view 3D model';
       case 'failed':
-        return 'Model processing failed${_errorDetails != null ? ': $_errorDetails' : '.'}';
+        return 'Model processing failed${_errorDetails != null ? ': $_errorDetails' : '.'} Tap to retry.';
       case 'pending':
       default:
         return 'Data has not been processed. Tap to process the model.';
@@ -130,7 +131,15 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
         });
       }
     } on PlatformException catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to fetch images: ${e.message}')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Couldn’t load images. Please try again.', style: TextStyle(color: Colors.white, fontSize: 14)),
+          backgroundColor: Colors.red[800],
+          duration: const Duration(seconds: 3),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+      );
       setState(() {
         imagePaths = [];
       });
@@ -151,7 +160,6 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
             widget.scan['snapshotPath'] = call.arguments['snapshotPath'];
           }
         });
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Model processed successfully')));
       }
     } else if (call.method == 'scanComplete') {
       final folderPath = call.arguments['folderPath']?.toString();
@@ -198,25 +206,34 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
   }
 
   Future<void> _previewUSDZ() async {
-    if (_status == 'failed' || _isProcessing) return;
+    if (_isProcessing) return;
 
     if (_status == 'uploaded' && widget.scan['usdzPath'] != null) {
       try {
         await platform.invokeMethod('openUSDZ', {'path': widget.scan['usdzPath']});
       } on PlatformException catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to preview USDZ: ${e.message}')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Couldn’t open the 3D model. Please try again.', style: TextStyle(color: Colors.white, fontSize: 14)),
+            backgroundColor: Colors.red[800],
+            duration: const Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+        );
       }
-    } else if (_status == 'pending') {
+    } else {
       await _processModel();
     }
   }
 
   Future<void> _processModel() async {
-    if (_isProcessing || _status == 'failed') return;
+    if (_isProcessing) return;
 
     setState(() {
       _isProcessing = true;
       _statusMessage = 'Processing model...';
+      _errorDetails = null; // Reset error details on retry
     });
 
     try {
@@ -249,17 +266,37 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
       });
 
       await platform.invokeMethod('updateScanStatus', {'folderPath': folderPath, 'status': 'uploaded'});
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Model processed successfully')));
     } on PlatformException catch (e) {
+      String errorMessage = 'Couldn’t process the model. Please try again.';
+      if (e.code == 'API_STATUS_ERROR' || e.code == 'API_REQUEST_FAILED') {
+        errorMessage = 'Couldn’t process the model. Please check your internet connection and try again.';
+      } else if (e.code == 'INVALID_ZIP_DATA') {
+        errorMessage = 'Scan data is incomplete. Please try scanning again.';
+      } else if (e.code == 'CAMERA_PERMISSION_DENIED') {
+        errorMessage = 'Camera access denied. Please enable camera permissions in Settings.';
+      } else if (e.code == 'AR_SESSION_ERROR') {
+        errorMessage = 'Unable to start scan. Please try again in a well-lit area.';
+      } else if (e.code == 'SERVER_UNAVAILABLE') {
+        errorMessage = 'Server is unavailable. Please try again later.';
+      }
+
       setState(() {
         _isProcessing = false;
         _status = 'failed';
-        _statusMessage = 'Model processing failed${e.message != null ? ': ${e.message}' : ''}';
-        _errorDetails = e.details?.toString();
+        _statusMessage = 'Model processing failed: $errorMessage Tap to retry.';
+        _errorDetails = e.message;
         widget.scan['metadata']['status'] = 'failed';
       });
       await platform.invokeMethod('updateScanStatus', {'folderPath': widget.scan['folderPath'], 'status': 'failed'});
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to process model: ${e.message}')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(errorMessage, style: const TextStyle(color: Colors.white, fontSize: 14)),
+          backgroundColor: Colors.red[800],
+          duration: const Duration(seconds: 3),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+      );
     }
   }
 
@@ -274,16 +311,38 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
 
       if (result == 'Scan deleted successfully' || result == true) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Model deleted successfully')));
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('Model deleted successfully', style: TextStyle(color: Colors.white, fontSize: 14)),
+              backgroundColor: Colors.black87,
+              duration: const Duration(seconds: 3),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+          );
           Navigator.of(context).pop();
         }
       } else {
         throw PlatformException(code: 'DELETE_FAILED', message: 'Deletion failed on native side: $result');
       }
-    } on PlatformException catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to delete model: ${e.message ?? e.code}')));
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('An unexpected error occurred during deletion')));
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          backgroundColor: Colors.black87,
+          title: const Text('Error Deleting Project', style: TextStyle(color: Colors.white)),
+          content: const Text(
+            'Couldn’t delete the model. Please try again.',
+            style: TextStyle(color: Colors.white70),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK', style: TextStyle(color: Colors.blue)),
+            ),
+          ],
+        ),
+      );
     }
   }
 
@@ -291,7 +350,7 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: Colors.black,
+        backgroundColor: Colors.black87,
         title: const Text('Delete Project', style: TextStyle(color: Colors.white)),
         content: Text(
           'Are you sure you want to delete "${widget.scan['metadata']['name'] ?? 'Unnamed Scan'}"? This action cannot be undone.',
@@ -330,7 +389,7 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: Colors.black,
+        backgroundColor: Colors.black87,
         title: const Text('Edit Project Name', style: TextStyle(color: Colors.white)),
         content: TextField(
           controller: _nameController,
@@ -367,7 +426,13 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
                 Navigator.pop(context);
               } on PlatformException catch (e) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Failed to update name: ${e.message}')),
+                  SnackBar(
+                    content: const Text('Couldn’t update the project name. Please try again.', style: TextStyle(color: Colors.white, fontSize: 14)),
+                    backgroundColor: Colors.red[800],
+                    duration: const Duration(seconds: 3),
+                    behavior: SnackBarBehavior.floating,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
                 );
                 Navigator.pop(context);
               }
@@ -381,10 +446,9 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
 
   Widget _buildMap({bool isFullScreen = false}) {
     final rawCoordinates = widget.scan['metadata']['coordinates'] as List<dynamic>?;
-    final defaultPosition = const LatLng(0.0, 0.0); // Default fallback position
-    const defaultZoom = 2.0; // Low zoom level for world view when no coordinates
+    final defaultPosition = const LatLng(0.0, 0.0);
+    const defaultZoom = 2.0;
 
-    // Process coordinates if available
     List<LatLng> points = [];
     Map<String, LatLng>? bounds;
     LatLng center = defaultPosition;
@@ -410,7 +474,33 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
         bounds = _calculateBounds(points);
         center = bounds['center'] as LatLng;
         zoom = 15.0;
+      } else if (!_hasShownNoGpsMessage) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('No location data available.', style: TextStyle(color: Colors.white, fontSize: 14)),
+              backgroundColor: Colors.red[800],
+              duration: const Duration(seconds: 3),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+          );
+          _hasShownNoGpsMessage = true;
+        });
       }
+    } else if (!_hasShownNoGpsMessage) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('No location data available.', style: TextStyle(color: Colors.white, fontSize: 14)),
+            backgroundColor: Colors.red[800],
+            duration: const Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+        );
+        _hasShownNoGpsMessage = true;
+      });
     }
 
     final polylines = points.isNotEmpty
@@ -474,22 +564,6 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
             ),
           ),
         ),
-        if (!isFullScreen && points.isEmpty)
-          Positioned(
-            top: 8,
-            left: 8,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.7),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Text(
-                'No location data available due to low GPS accuracy',
-                style: TextStyle(color: Colors.white70, fontSize: 12),
-              ),
-            ),
-          ),
         if (!isFullScreen && points.isNotEmpty)
           Positioned(
             bottom: 8,
@@ -575,20 +649,6 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
               _linkedText('Notes:'),
             ],
           ),
-          const SizedBox(height: 20),
-          const Divider(color: Colors.white12),
-          const SizedBox(height: 8),
-          const Text(
-            'Comments',
-            style: TextStyle(
-              fontSize: 16,
-              color: Colors.white,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 8),
-          _commentRow('The surface is uneven here'),
-          _commentRow('Scan incomplete'),
         ],
       ),
     );
@@ -746,10 +806,14 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
   @override
   Widget build(BuildContext context) {
     final rawCoordinates = widget.scan['metadata']['coordinates'] as List<dynamic>?;
-    final hasValidCoordinates = rawCoordinates != null && rawCoordinates.isNotEmpty &&
-        rawCoordinates.any((coord) => coord is List<dynamic> && coord.length >= 2 &&
-            double.tryParse(coord[0].toString()) != null && double.tryParse(coord[1].toString()) != null &&
-            double.tryParse(coord[0].toString()) != 0.0 && double.tryParse(coord[1].toString()) != 0.0);
+    final hasValidCoordinates = rawCoordinates != null &&
+        rawCoordinates.isNotEmpty &&
+        rawCoordinates.any((coord) => coord is List<dynamic> &&
+            coord.length >= 2 &&
+            double.tryParse(coord[0].toString()) != null &&
+            double.tryParse(coord[1].toString()) != null &&
+            double.tryParse(coord[0].toString()) != 0.0 &&
+            double.tryParse(coord[1].toString()) != 0.0);
 
     return Scaffold(
       backgroundColor: Colors.grey[900],
@@ -826,7 +890,7 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
                             child: Text(
                               hasValidCoordinates
                                   ? (widget.scan['metadata']['location_name'] ?? 'Unknown Location')
-                                  : 'No location data available due to low GPS accuracy',
+                                  : 'No location data available',
                               style: const TextStyle(color: Colors.white, fontSize: 16),
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -880,8 +944,8 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
                         imagePaths.isEmpty
                             ? const Center(
                           child: Text(
-                            "No images to display.",
-                            style: TextStyle(color: Colors.white54),
+                            'No images to display',
+                            style: TextStyle(color: Colors.white54, fontSize: 12),
                           ),
                         )
                             : Padding(

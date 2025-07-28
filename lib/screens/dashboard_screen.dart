@@ -78,7 +78,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       setState(() {
         _isRefreshing = false;
       });
-      _showSnack('Failed to fetch scans: ${e.message}', isError: true);
+      _showSnack('Couldn’t load scans. Please try again.', isError: true);
     }
   }
 
@@ -87,10 +87,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       try {
         print('Received ${call.method} with arguments: ${call.arguments}');
         await _fetchScans();
-        _showSnack('Scan updated successfully');
+        // Removed: _showSnack('Scan updated successfully');
       } catch (e) {
         print('Error handling ${call.method}: $e');
-        _showSnack('Error updating scans: $e', isError: true);
+        _showSnack('Couldn’t update scans. Please try again.', isError: true);
       }
     } else {
       print('Unhandled method call: ${call.method} with arguments: ${call.arguments}');
@@ -100,8 +100,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void _showSnack(String message, {bool isError = false}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message),
-        backgroundColor: isError ? Colors.red : Colors.green,
+        content: Text(
+          message,
+          style: const TextStyle(color: Colors.white, fontSize: 14),
+        ),
+        backgroundColor: isError ? Colors.red[800] : Colors.black87,
+        duration: const Duration(seconds: 3),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
     );
   }
@@ -322,11 +328,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
         children: [
           currentView == 'list' || currentView == 'grid'
               ? (scans.isEmpty
-              ? const Center(child: Text('No scans available', style: TextStyle(color: Colors.white)))
+              ? const Center(child: Text('No scans available', style: TextStyle(color: Colors.white54, fontSize: 14)))
               : RefreshIndicator(
             onRefresh: _fetchScans,
             color: Colors.white,
-            backgroundColor: Colors.black,
+            backgroundColor: Colors.black87,
             child: Stack(
               children: [
                 ListView.builder(
