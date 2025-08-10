@@ -346,6 +346,45 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
     }
   }
 
+  Future<void> _downloadZipFile() async {
+    try {
+      final folderPath = widget.scan['folderPath']?.toString();
+      if (folderPath == null || folderPath.isEmpty) {
+        throw PlatformException(code: 'INVALID_PATH', message: 'Folder path is null or empty');
+      }
+
+      final result = await platform.invokeMethod('downloadZipFile', {'folderPath': folderPath});
+
+      if (result == 'Zip file downloaded successfully' || result == true) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('Zip file downloaded successfully', style: TextStyle(color: Colors.white, fontSize: 14)),
+              backgroundColor: Colors.black87,
+              duration: const Duration(seconds: 3),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+          );
+        }
+      } else {
+        throw PlatformException(code: 'DOWNLOAD_FAILED', message: 'Download failed on native side: $result');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Couldn’t download the zip file. Please try again.', style: TextStyle(color: Colors.white, fontSize: 14)),
+            backgroundColor: Colors.red[800],
+            duration: const Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+        );
+      }
+    }
+  }
+
   void _showDeleteConfirmationDialog() {
     showDialog(
       context: context,
@@ -838,9 +877,17 @@ class _ModelDetailScreenState extends State<ModelDetailScreen>
                       PopupMenuButton<String>(
                         icon: const Icon(Icons.more_horiz, color: Colors.white, size: 24),
                         onSelected: (value) {
-                          if (value == 'delete') _showDeleteConfirmationDialog();
+                          if (value == 'delete') {
+                            _showDeleteConfirmationDialog();
+                          } else if (value == 'download') {
+                            _downloadZipFile();
+                          }
                         },
                         itemBuilder: (context) => [
+                          const PopupMenuItem(
+                            value: 'download',
+                            child: Text('Download Zip', style: TextStyle(color: Colors.blue)),
+                          ),
                           const PopupMenuItem(
                             value: 'delete',
                             child: Text('Delete', style: TextStyle(color: Colors.red)),

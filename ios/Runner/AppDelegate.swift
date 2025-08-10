@@ -83,6 +83,8 @@ import GoogleMaps
                     self.checkZipFile(call: call, result: result)
                 case "scanComplete":
                     self.handleScanComplete(call: call, result: result)
+                case "downloadZipFile":
+                    self.downloadZipFile(call: call, result: result)
                 default:
                     result(FlutterMethodNotImplemented)
                 }
@@ -96,6 +98,97 @@ import GoogleMaps
         }
 
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    }
+
+    private func downloadZipFile(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let args = call.arguments as? [String: Any],
+              let folderPath = args["folderPath"] as? String else {
+            result(FlutterError(
+                code: "INVALID_ARGUMENT",
+                message: "Invalid or missing folder path.",
+                details: nil
+            ))
+            return
+        }
+
+        let scanFolderURL = URL(fileURLWithPath: folderPath)
+        let zipURL = scanFolderURL.appendingPathComponent("input_data.zip")
+        let fileManager = FileManager.default
+
+        guard fileManager.fileExists(atPath: zipURL.path) else {
+            os_log("ZIP file not found at: %@", log: OSLog.default, type: .error, zipURL.path)
+            result(FlutterError(
+                code: "FILE_NOT_FOUND",
+                message: "ZIP file not found at \(zipURL.path)",
+                details: nil
+            ))
+            return
+        }
+
+        // Copy zip file to temporary directory to ensure shareability
+        let tempDir = FileManager.default.temporaryDirectory
+        let tempZipURL = tempDir.appendingPathComponent("input_data_\(UUID().uuidString).zip")
+        do {
+            if fileManager.fileExists(atPath: tempZipURL.path) {
+                try fileManager.removeItem(at: tempZipURL)
+            }
+            try fileManager.copyItem(at: zipURL, to: tempZipURL)
+            os_log("Copied ZIP file to temporary directory: %@", log: OSLog.default, type: .info, tempZipURL.path)
+        } catch {
+            os_log("Failed to copy ZIP file to temporary directory: %@", log: OSLog.default, type: .error, error.localizedDescription)
+            result(FlutterError(
+                code: "FILE_COPY_FAILED",
+                message: "Failed to prepare ZIP file for download: \(error.localizedDescription)",
+                details: nil
+            ))
+            return
+        }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, let controller = self.window?.rootViewController else {
+                // Clean up temporary file
+                try? fileManager.removeItem(at: tempZipURL)
+                result(FlutterError(
+                    code: "CONTROLLER_NOT_FOUND",
+                    message: "Failed to access root view controller.",
+                    details: nil
+                ))
+                return
+            }
+
+            let activityVC = UIActivityViewController(activityItems: [tempZipURL], applicationActivities: nil)
+            // Configure for iPad to avoid UIPopoverPresentationController crash
+            if UIDevice.current.userInterfaceIdiom == .pad {
+                activityVC.popoverPresentationController?.sourceView = controller.view
+                activityVC.popoverPresentationController?.sourceRect = CGRect(
+                    x: controller.view.bounds.midX,
+                    y: controller.view.bounds.midY,
+                    width: 0,
+                    height: 0
+                )
+                activityVC.popoverPresentationController?.permittedArrowDirections = []
+            }
+
+            activityVC.completionWithItemsHandler = { _, completed, _, error in
+                // Clean up temporary file
+                try? fileManager.removeItem(at: tempZipURL)
+                if completed {
+                    os_log("ZIP file shared successfully: %@", log: OSLog.default, type: .info, tempZipURL.path)
+                    result("Zip file downloaded successfully")
+                } else if let error = error {
+                    os_log("Failed to share ZIP file: %@", log: OSLog.default, type: .error, error.localizedDescription)
+                    result(FlutterError(
+                        code: "DOWNLOAD_FAILED",
+                        message: "Failed to download ZIP file: \(error.localizedDescription)",
+                        details: nil
+                    ))
+                } else {
+                    os_log("ZIP file download cancelled: %@", log: OSLog.default, type: .info, tempZipURL.path)
+                    result("Download cancelled")
+                }
+            }
+            controller.present(activityVC, animated: true)
+        }
     }
 
     private func handleScanComplete(call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -381,6 +474,18 @@ import GoogleMaps
             }
 
             let activityVC = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+            // Configure for iPad to avoid UIPopoverPresentationController crash
+            if UIDevice.current.userInterfaceIdiom == .pad {
+                activityVC.popoverPresentationController?.sourceView = controller.view
+                activityVC.popoverPresentationController?.sourceRect = CGRect(
+                    x: controller.view.bounds.midX,
+                    y: controller.view.bounds.midY,
+                    width: 0,
+                    height: 0
+                )
+                activityVC.popoverPresentationController?.permittedArrowDirections = []
+            }
+
             activityVC.completionWithItemsHandler = { _, completed, _, error in
                 if completed {
                     result("USDZ shared successfully")
