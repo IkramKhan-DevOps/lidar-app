@@ -1,24 +1,64 @@
 import 'package:flutter/material.dart';
-import 'package:platform_channel_swift_demo/screens/home_screen.dart';
-import 'package:platform_channel_swift_demo/screens/model_detail_screen.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-class LoginScreen extends StatelessWidget {
+import '../../settings/providers/auth_provider.dart';
+import '../../view_model/auth/auth_state.dart';
+
+class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
 
   @override
+  ConsumerState<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends ConsumerState<LoginScreen> {
+  final _usernameController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _staySignedIn = false;
+  bool _obscure = true;
+
+  @override
+  void dispose() {
+    _usernameController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _onLogin() async {
+    FocusScope.of(context).unfocus();
+
+    // inside _onLogin()
+    await ref.read(authViewModelProvider.notifier).login(
+      email: _usernameController.text.trim(),
+      password: _passwordController.text,
+    );
+
+    final state = ref.read(authViewModelProvider);
+    if (state.status == AuthStatus.success) {
+      if (mounted) {
+        Navigator.of(context).pushReplacementNamed('/home');
+      }
+    } else if (state.status == AuthStatus.error) {
+      final msg = state.errorMessage ?? 'Login failed';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final authState = ref.watch(authViewModelProvider);
+
     return Scaffold(
       body: Stack(
         children: [
-          // Background image
           SizedBox.expand(
             child: Image.asset(
               'lib/assets/images/login_image.png',
               fit: BoxFit.cover,
             ),
           ),
-
-          // Dark overlay
           Container(
             decoration: BoxDecoration(
               gradient: LinearGradient(
@@ -31,8 +71,6 @@ class LoginScreen extends StatelessWidget {
               ),
             ),
           ),
-
-          // Content
           Column(
             children: [
               const SizedBox(height: 60),
@@ -41,7 +79,18 @@ class LoginScreen extends StatelessWidget {
                 child: _Header(),
               ),
               const Spacer(),
-              const _LoginCard(),
+              _LoginCard(
+                usernameController: _usernameController,
+                passwordController: _passwordController,
+                staySignedIn: _staySignedIn,
+                onStaySignedInChanged: (v) =>
+                    setState(() => _staySignedIn = v ?? false),
+                onLoginPressed: authState.isSubmitting ? null : _onLogin,
+                isLoading: authState.isSubmitting,
+                obscure: _obscure,
+                toggleObscure: () =>
+                    setState(() => _obscure = !_obscure),
+              ),
             ],
           ),
         ],
@@ -51,8 +100,6 @@ class LoginScreen extends StatelessWidget {
 }
 
 class _Header extends StatelessWidget {
-  const _Header();
-
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -96,11 +143,35 @@ class _Header extends StatelessWidget {
 }
 
 class _LoginCard extends StatelessWidget {
-  const _LoginCard();
+  final TextEditingController usernameController;
+  final TextEditingController passwordController;
+  final bool staySignedIn;
+  final ValueChanged<bool?> onStaySignedInChanged;
+  final VoidCallback? onLoginPressed;
+  final bool isLoading;
+  final bool obscure;
+  final VoidCallback toggleObscure;
+
+  const _LoginCard({
+    super.key,
+    required this.usernameController,
+    required this.passwordController,
+    required this.staySignedIn,
+    required this.onStaySignedInChanged,
+    required this.onLoginPressed,
+    required this.isLoading,
+    required this.obscure,
+    required this.toggleObscure,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final canSubmit = usernameController.text.isNotEmpty &&
+        passwordController.text.isNotEmpty &&
+        onLoginPressed != null;
+
     return Container(
+      width: double.infinity,
       padding: const EdgeInsets.all(24),
       decoration: const BoxDecoration(
         color: Colors.white,
@@ -112,21 +183,38 @@ class _LoginCard extends StatelessWidget {
           _CustomTextField(
             label: 'Username or Email',
             hintText: 'example@gmail.com',
+            controller: usernameController,
+            keyboardType: TextInputType.emailAddress,
           ),
           const SizedBox(height: 16),
           _CustomTextField(
             label: 'Password',
-            obscureText: true,
-            suffixIcon: Icon(Icons.visibility_off),
+            controller: passwordController,
+            obscureText: obscure,
+            suffixIcon: IconButton(
+              icon: Icon(
+                obscure ? Icons.visibility_off : Icons.visibility,
+                color: Colors.grey[600],
+              ),
+              onPressed: toggleObscure,
+            ),
           ),
           const SizedBox(height: 10),
           Row(
             children: [
-              Checkbox(value: false, onChanged: (_) {}),
-              const Text('Stay signed in'),
+              Checkbox(
+                value: staySignedIn,
+                onChanged: onStaySignedInChanged,
+              ),
+              const Text(
+                'Stay signed in',
+                style: TextStyle(color: Colors.black87),
+              ),
               const Spacer(),
               TextButton(
-                onPressed: () {},
+                onPressed: () {
+                  // TODO: Forgot password flow
+                },
                 child: const Text('Forgot password?'),
               ),
             ],
@@ -135,12 +223,7 @@ class _LoginCard extends StatelessWidget {
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
-              onPressed: () {
-                // Navigate to Home Screen on login
-                Navigator.of(context).pushReplacement(
-                  MaterialPageRoute(builder: (_) => HomeScreen()),
-                );
-              },
+              onPressed: canSubmit ? onLoginPressed : null,
               style: ElevatedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 backgroundColor: const Color(0xFF008CFF),
@@ -149,7 +232,17 @@ class _LoginCard extends StatelessWidget {
                 ),
                 elevation: 3,
               ),
-              child: const Text(
+              child: isLoading
+                  ? const SizedBox(
+                height: 22,
+                width: 22,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.5,
+                  valueColor:
+                  AlwaysStoppedAnimation<Color>(Colors.white),
+                ),
+              )
+                  : const Text(
                 'Log in',
                 style: TextStyle(fontSize: 16, color: Colors.white),
               ),
@@ -166,12 +259,16 @@ class _CustomTextField extends StatelessWidget {
   final String? hintText;
   final bool obscureText;
   final Widget? suffixIcon;
+  final TextEditingController controller;
+  final TextInputType? keyboardType;
 
   const _CustomTextField({
     required this.label,
     this.hintText,
     this.obscureText = false,
     this.suffixIcon,
+    required this.controller,
+    this.keyboardType,
   });
 
   @override
@@ -188,19 +285,26 @@ class _CustomTextField extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         TextField(
+          controller: controller,
+          keyboardType: keyboardType,
           obscureText: obscureText,
           decoration: InputDecoration(
             hintText: hintText,
             suffixIcon: suffixIcon,
             filled: true,
             fillColor: Colors.grey[100],
-            contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 16,
+            ),
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(14),
               borderSide: BorderSide.none,
             ),
           ),
+          onChanged: (_) {
+            (context as Element).markNeedsBuild();
+          },
         ),
       ],
     );

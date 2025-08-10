@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:platform_channel_swift_demo/screens/auth/login_screen.dart';
-import 'package:platform_channel_swift_demo/screens/home_screen.dart';
-import 'package:platform_channel_swift_demo/screens/model_detail_screen.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import 'screens/auth/login_screen.dart';
+import 'screens/home_screen.dart';
 
 void main() {
-  runApp(const ModelCraftApp());
+  runApp(const ProviderScope(child: ModelCraftApp()));
 }
 
 class ModelCraftApp extends StatelessWidget {
@@ -23,7 +24,9 @@ class ModelCraftApp extends StatelessWidget {
         useMaterial3: true,
       ),
       home: const LoginScreen(),
-      //home: ModelDetailScreen(),
+      routes: {
+        '/home': (_) => HomeScreen(),
+      },
     );
   }
 }

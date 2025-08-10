@@ -21,7 +21,7 @@ class LoginScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isLoading = ref.watch(loginProvider);
+    // final isLoading = ref.watch(loginProvider);
     var size = MediaQuery.of(context).size;
     bool isTablet = size.width > 450;
     bool isPortrait = MediaQuery.of(context).orientation == Orientation.portrait;
@@ -72,25 +72,25 @@ class LoginScreen extends ConsumerWidget {
                   const SizedBox(height: 10),
 
                   // BUTTON
-                  AppPrimaryButton(
-                    onPressed: isLoading
-                        ? () {}
-                        : () {
-                            final data = {
-                              'email': emailController.text,
-                              'password': passwordController.text,
-                            };
-                            ref.read(loginProvider.notifier).loginAPI(data, context); // Calling login API
-                          },
-                    child: isLoading
-                        ? const CircularProgressIndicator(
-                            color: Colors.white,
-                          )
-                        : ButtonIconLabel(
-                      title: 'Login',
-                      icon: Icons.login,
-                    ),
-                  ),
+                  // AppPrimaryButton(
+                  //   onPressed: isLoading
+                  //       ? () {}
+                  //       : () {
+                  //           final data = {
+                  //             'email': emailController.text,
+                  //             'password': passwordController.text,
+                  //           };
+                  //           ref.read(loginProvider.notifier).loginAPI(data, context); // Calling login API
+                  //         },
+                  //   child: isLoading
+                  //       ? const CircularProgressIndicator(
+                  //           color: Colors.white,
+                  //         )
+                  //       : ButtonIconLabel(
+                  //     title: 'Login',
+                  //     icon: Icons.login,
+                  //   ),
+                  // ),
                   const SizedBox(height: 20),
                 ],
               ),
