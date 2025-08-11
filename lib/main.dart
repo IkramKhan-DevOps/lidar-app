@@ -2,12 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'screens/auth/login_screen.dart';
-import 'screens/home_screen.dart';
-
-void main() {
-  runApp(const ProviderScope(child: ModelCraftApp()));
-}
+import 'core/configs/app_routes.dart';
 
 class ModelCraftApp extends StatelessWidget {
   static const platform = MethodChannel('com.demo.channel/message');
@@ -23,10 +18,14 @@ class ModelCraftApp extends StatelessWidget {
         brightness: Brightness.dark,
         useMaterial3: true,
       ),
-      home: const LoginScreen(),
-      routes: {
-        '/home': (_) => HomeScreen(),
-      },
+      initialRoute: AppRoutes.splashScreen, // or AppRoutes.splashScreen
+      routes: AppRoutes.routes,
+      onGenerateRoute: AppRoutes.onGenerateRoute,
+      onUnknownRoute: AppRoutes.onUnknownRoute,
     );
   }
+}
+
+void main() {
+  runApp(const ProviderScope(child: ModelCraftApp()));
 }

@@ -29,13 +29,13 @@ class ProfileNotifier {
 
   Future<ProfileModel> getProfile() async {
     final BaseApiService apiServices = NetworkApiService();
-    final response = await apiServices.getAPI(APIUrl.profile, true);
+    final response = await apiServices.getAPI(APIUrl.userDetails, true);
     return ProfileModel.fromJson(response);
   }
 
   Future<void> updateProfile(Map<String, dynamic> updatedData) async {
     final BaseApiService apiServices = NetworkApiService();
-    final response = await apiServices.putAPI(APIUrl.profile, updatedData);
+    final response = await apiServices.putAPI(APIUrl.userDetails, updatedData);
   }
 
 }

@@ -24,7 +24,3 @@ class PasswordChangeProvider extends StateNotifier<bool> {
   }
 }
 
-// final passwordChangeProvider = StateNotifierProvider<PasswordChangeProvider, bool>((ref) {
-//   final apiServices = ref.read(apiServicesProvider);
-//   return PasswordChangeProvider(apiServices);
-// });

@@ -1,8 +1,3 @@
-// =============================================================
-// NETWORK IMPLEMENTATION
-// Handles: Headers, Token Injection, JSON Encoding, Error Mapping.
-// Includes temporary debug logging for easier troubleshooting.
-// =============================================================
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
@@ -15,25 +10,22 @@ class NetworkApiService extends BaseApiService {
   final Duration _getTimeout = const Duration(seconds: 12);
   final Duration _writeTimeout = const Duration(seconds: 20);
 
-  // --------------- COMMON HEADERS ---------------
   Map<String, String> _headers({String? token, bool json = true}) {
-  final h = <String, String>{};
-  if (token != null && token.isNotEmpty) {
-  h['Authorization'] = 'Token $token';
-  }
-  if (json) {
-  h['Content-Type'] = 'application/json';
-  h['Accept'] = 'application/json';
-  }
-  return h;
+    final h = <String, String>{};
+    if (token != null && token.isNotEmpty) {
+      h['Authorization'] = 'Token $token';
+    }
+    if (json) {
+      h['Content-Type'] = 'application/json';
+      h['Accept'] = 'application/json';
+    }
+    return h;
   }
 
-
-  // --------------- GET ---------------
   @override
   Future<dynamic> getAPI(String url, [bool isToken = false]) async {
     try {
-      final token = isToken ? await AuthToken.read() : null;
+      final token = isToken ? await AuthToken.getToken() : null;
       final res = await http
           .get(Uri.parse(url), headers: _headers(token: token))
           .timeout(_getTimeout);
@@ -44,12 +36,11 @@ class NetworkApiService extends BaseApiService {
     }
   }
 
-  // --------------- POST ---------------
   @override
   Future<dynamic> postAPI(String url, dynamic data,
       [bool isToken = false, bool noJson = false]) async {
     try {
-      final token = isToken ? await AuthToken.read() : null;
+      final token = isToken ? await AuthToken.getToken() : null;
       final bool sendJson = !noJson;
       final body = (sendJson && data is Map) ? jsonEncode(data) : data;
       final res = await http
@@ -63,15 +54,13 @@ class NetworkApiService extends BaseApiService {
     }
   }
 
-  // --------------- PUT ---------------
   @override
   Future<dynamic> putAPI(String url, dynamic data) async {
     try {
-      final token = await AuthToken.read();
+      final token = await AuthToken.getToken();
       final body = data is Map ? jsonEncode(data) : data;
       final res = await http
-          .put(Uri.parse(url),
-          headers: _headers(token: token), body: body)
+          .put(Uri.parse(url), headers: _headers(token: token), body: body)
           .timeout(_writeTimeout);
       _debug('PUT', url, res, requestBody: body);
       return _validate(res);
@@ -80,11 +69,11 @@ class NetworkApiService extends BaseApiService {
     }
   }
 
-  // --------------- DELETE ---------------
   @override
-  Future<dynamic> deleteAPI(String url, [bool isToken = false, bool noJson = false]) async {
+  Future<dynamic> deleteAPI(String url,
+      [bool isToken = false, bool noJson = false]) async {
     try {
-      final token = await AuthToken.read();
+      final token = await AuthToken.getToken();
       final res = await http
           .delete(Uri.parse(url), headers: _headers(token: token))
           .timeout(_writeTimeout);
@@ -94,8 +83,6 @@ class NetworkApiService extends BaseApiService {
       throw FetchDataException('No internet connection.');
     }
   }
-
-  // --------------- RESPONSE VALIDATION ---------------
 
   void _debug(String method, String url, http.Response res,
       {dynamic requestBody}) {
@@ -126,18 +113,7 @@ class NetworkApiService extends BaseApiService {
       case 404:
         throw FetchDataException('404 Not Found: $body');
       default:
-        throw FetchDataException(
-            'Status ${res.statusCode}: $body');
+        throw FetchDataException('Status ${res.statusCode}: $body');
     }
   }
 }
-
-  // --------------- DEBUG PRINT (remove in production) ---------------
-  void _debugPrint(String method, String url, http.Response res, {dynamic requestBody}) {
-    // ignore: avoid_print
-    print('=== $method $url ===');
-    if (requestBody != null) print('Request: $requestBody');
-    print('Status: ${res.statusCode}');
-    print('Body: ${res.body}');
-    print('====================');
-  }

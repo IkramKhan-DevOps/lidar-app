@@ -1,155 +1,156 @@
-// =============================================================
-// AUTH VIEW MODEL (StateNotifier)
-// Contains UI-triggered methods (login, signup, logout).
-// Performs validation, calls repository, maps errors.
-// =============================================================
 import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-
+import '../../../../core/errors/app_exceptions.dart';
+import '../../core/storage/auth_storage.dart';
+import '../../models/profile_model.dart';
 import '../../repository/auth_repository.dart';
-import 'auth_state.dart';
+import '../../repository/profile_repository.dart';
+import '../../settings/providers/global_provider.dart';
+import '../states/auth_state.dart';
+
 
 class AuthViewModel extends StateNotifier<AuthState> {
-  final AuthRepository _repo;
+  final AuthRepository _authRepo;
+  final ProfileRepository _profileRepo;
+  final Ref _ref;
 
-  AuthViewModel(this._repo) : super(AuthState.initial());
+  AuthViewModel(this._authRepo, this._profileRepo, this._ref)
+      : super(AuthState.initial());
 
-  // --------------- LOGIN ---------------
-  Future<void> login({
-    required String email,
-    required String password,
-  }) async {
+  Future<void> login({required String email, required String password}) async {
     if (email.isEmpty || password.isEmpty) {
-      state = state.copyWith(
-        status: AuthStatus.error,
-        errorMessage: 'Email and password are required.',
-      );
+      _emitError('Email and password required.');
       return;
     }
-
+    state = state.copyWith(flow: AuthFlow.loading, isSubmitting: true, error: null);
     try {
+      final token = await _authRepo.login(email: email, password: password);
+      final profile = await _profileRepo.fetchProfile();
+      _ref.read(profileNotifierProvider.notifier).setProfile(profile);
       state = state.copyWith(
-        status: AuthStatus.loading,
-        isSubmitting: true,
-        errorMessage: null,
-        isSignupFlow: false,
-      );
-
-      final token = await _repo.login(email: email, password: password);
-
-      state = state.copyWith(
-        status: AuthStatus.success,
+        flow: AuthFlow.authenticated,
         token: token,
+        profile: profile,
         isSubmitting: false,
-        isSignupFlow: false,
       );
     } catch (e) {
-      state = state.copyWith(
-        status: AuthStatus.error,
-        errorMessage: _mapError(e),
-        isSubmitting: false,
-        isSignupFlow: false,
-      );
+      _emitError(_mapError(e));
     }
   }
 
-  // --------------- SIGNUP ---------------
-  Future<void> signup({
+  Future<void> register({
+    required String username,
     required String email,
-    required String password,
-    required String confirmPassword,
-    String? username,
+    required String password1,
+    required String password2,
   }) async {
-    if (email.isEmpty || password.isEmpty || confirmPassword.isEmpty) {
-      state = state.copyWith(
-        status: AuthStatus.error,
-        errorMessage: 'All fields are required.',
-      );
+    if ([username, email, password1, password2].any((e) => e.isEmpty)) {
+      _emitError('All fields are required.');
       return;
     }
-
-    if (password != confirmPassword) {
-      state = state.copyWith(
-        status: AuthStatus.error,
-        errorMessage: 'Passwords do not match.',
-      );
+    if (password1 != password2) {
+      _emitError('Passwords do not match.');
       return;
     }
-
+    state = state.copyWith(flow: AuthFlow.loading, isSubmitting: true, error: null);
     try {
-      state = state.copyWith(
-        status: AuthStatus.loading,
-        isSubmitting: true,
-        errorMessage: null,
-        isSignupFlow: true,
-      );
-
-      final token = await _repo.signup(
-        email: email,
-        password: password,
-        confirmPassword: confirmPassword,
+      final msg = await _authRepo.register(
         username: username,
+        email: email,
+        password1: password1,
+        password2: password2,
       );
-
       state = state.copyWith(
-        status: AuthStatus.success,
-        token: token,
+        flow: AuthFlow.registered,
+        registrationMessage: msg,
         isSubmitting: false,
-        isSignupFlow: true,
       );
     } catch (e) {
-      state = state.copyWith(
-        status: AuthStatus.error,
-        errorMessage: _mapError(e),
-        isSubmitting: false,
-        isSignupFlow: true,
-      );
+      _emitError(_mapError(e));
     }
   }
 
-  // --------------- LOGOUT ---------------
-  Future<void> logout() async {
-    await _repo.logout();
-    state = AuthState.initial();
+  Future<void> tryRestoreSession() async {
+    final token = await AuthToken.getToken();
+    if (token == null) {
+      state = AuthState.initial();
+      return;
+    }
+    state = state.copyWith(flow: AuthFlow.loading, isSubmitting: true);
+    try {
+      final profile = await _profileRepo.fetchProfile();
+      _ref.read(profileNotifierProvider.notifier).setProfile(profile);
+      state = state.copyWith(
+        flow: AuthFlow.authenticated,
+        token: token,
+        profile: profile,
+        isSubmitting: false,
+      );
+    } catch (_) {
+      await _authRepo.logout();
+      state = AuthState.initial();
+    }
   }
 
-  // --------------- ERROR MAPPING ---------------
+  // Remote + local logout sequence
+  Future<void> logout() async {
+    // Show a small spinner (UI can listen to isLoggingOut)
+    state = state.copyWith(isLoggingOut: true, error: null);
+
+    String serverMessage = '';
+    try {
+      // Attempt remote logout (ignore result if it fails)
+      serverMessage = await _authRepo.logoutRemote();
+    } catch (e) {
+      // Acceptable failures:
+      // - 401 Invalid token (already invalid on server)
+      // - Network offline
+      final msg = e.toString();
+      if (!msg.contains('401') && !msg.contains('Unauthorized')) {
+        // If you want to surface the error, set error field (optional)
+        // state = state.copyWith(error: 'Logout server error (ignored)');
+      }
+    } finally {
+      // Always clear local state
+      await _authRepo.logout();
+      _ref.read(profileNotifierProvider.notifier).clear();
+      state = AuthState.initial();
+    }
+
+    // (Optional) If you want to keep a last server message, you could store it in
+    // a separate provider or show a SnackBar from the UI after ref.listen detects state reset.
+  }
+
+  void _emitError(String message) {
+    state = state.copyWith(
+      flow: AuthFlow.error,
+      error: message,
+      isSubmitting: false,
+      isLoggingOut: false,
+    );
+  }
+// Add this method inside AuthViewModel (after existing ones).
+  void setProfileFromOutside(ProfileModel profile) {
+    if (!state.isLoggedIn) return;
+    state = state.copyWith(profile: profile);
+  }
   String _mapError(Object e) {
     final raw = e.toString();
-
-    // Attempt to parse JSON-like error bodies returned by backend.
     final start = raw.indexOf('{');
     final end = raw.lastIndexOf('}');
     if (start != -1 && end != -1 && end > start) {
-      final jsonStr = raw.substring(start, end + 1);
       try {
-        final decoded = jsonDecode(jsonStr);
-        if (decoded is Map) {
-          if (decoded['email'] is List && decoded['email'].isNotEmpty) {
-            return decoded['email'][0].toString();
-          }
-          if (decoded['password'] is List && decoded['password'].isNotEmpty) {
-            return decoded['password'][0].toString();
-          }
-          if (decoded['non_field_errors'] is List &&
-              decoded['non_field_errors'].isNotEmpty) {
-            return decoded['non_field_errors'][0].toString();
-          }
-          // Generic field error extraction:
-          for (final entry in decoded.entries) {
-            if (entry.value is List && entry.value.isNotEmpty) {
-              return entry.value[0].toString();
-            }
-          }
+        final decoded =
+        jsonDecode(raw.substring(start, end + 1)) as Map<String, dynamic>;
+        for (final entry in decoded.entries) {
+          final val = entry.value;
+          if (val is List && val.isNotEmpty) return val.first.toString();
+          if (val is String) return val;
         }
-      } catch (_) {
-        // swallow parse error, fallback below
-      }
+      } catch (_) {}
     }
-
-    if (raw.contains('Unauthorized')) return 'Unauthorized. Check credentials.';
-    if (raw.contains('password')) return 'Invalid password or mismatch.';
+    if (raw.contains('Unauthorized')) return 'Invalid credentials.';
     return raw.replaceAll('Exception: ', '');
   }
 }

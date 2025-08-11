@@ -1,20 +1,26 @@
-/// Central place for building API endpoints.
-/// Supports simple environment switching (dev vs prod).
+/// Central place for building API endpoints and handling simple
+/// environment switching (dev vs prod).
 ///
-/// Adjust [AppConfig.env] to switch between seedswild.com (prod)
-/// and 127.0.0.1:8000 (dev). For Android emulator + local server,
-/// you may need 10.0.2.2:8000 instead of 127.0.0.1.
+/// HOW TO SWITCH ENV:
+///   - Change [AppConfig.env] to AppEnv.dev while developing locally.
+///   - For Android emulator with a local Django server use '10.0.2.2:8000'
+///     instead of '127.0.0.1:8000'.
+///
+/// All endpoints intentionally end with a trailing slash (Django REST Framework
+/// default). If your backend is configured without APPEND_SLASH, remove them.
 enum AppEnv { dev, prod }
 
 class AppConfig {
   static const AppEnv env = AppEnv.prod;
 
-  static String get protocol => 'https';
+  // Change to 'http' if your local server is not using HTTPS.
+  static String get protocol => env == AppEnv.prod ? 'https' : 'http';
 
   static String get domain {
     switch (env) {
       case AppEnv.dev:
-        return '127.0.0.1:8000'; // or '10.0.2.2:8000' for Android emulator
+      // Use 10.0.2.2 for Android emulator, 127.0.0.1 for iOS simulator.
+        return '127.0.0.1:8000';
       case AppEnv.prod:
         return 'seedswild.com';
     }
@@ -22,66 +28,49 @@ class AppConfig {
 
   static String get root => '$protocol://$domain/';
   static String get api => '${root}api/';
-  static String get v1 => '${api}v1/';
+
+  // Accounts/Auth bases
   static String get accountsBase => '${api}accounts/';
   static String get authBase => '${accountsBase}auth/';
+
+  // Versioned (if you add more versioned APIs)
+  static String get v1 => '${api}v1/';
 }
 
 /// Public API URL helper.
 ///
-/// NOTE: All endpoints include trailing slashes to match typical DRF style.
-/// If your backend rejects trailing slashes, remove them.
+/// NOTE:
+/// - Keep naming consistent: verbs or nouns.
+/// - Avoid duplicating the same endpoint under two different names.
+/// - If an endpoint changes you only update here.
 class APIUrl {
-  // AUTH (Accounts/Auth)
+  // Authentication / Registration
   static String get signIn => '${AppConfig.authBase}login/';
   static String get signUp => '${AppConfig.authBase}registration/';
   static String get logout => '${AppConfig.authBase}logout/';
-  static String get profile => '${AppConfig.authBase}profile/';
+
+  // User (dj-rest-auth user detail) – GET (read), PUT/PATCH (update)
+  // Duplicate old "profile" name removed to avoid confusion.
+  static String get userDetails => '${AppConfig.authBase}user/';
+
+  // Password Change (dj-rest-auth)
+  // Endpoint you asked to add: https://seedswild.com/api/accounts/auth/password/change/
   static String get passwordChange => '${AppConfig.authBase}password/change/';
+  static String get passwordReset => '${AppConfig.authBase}password/reset/';
 
-  // SOCIAL / OAUTH (if implemented)
-  static String get signInGoogle => '${AppConfig.authBase}google/';
-  static String get signInApple => '${AppConfig.authBase}apple/';
-
-  // V1 Feature Endpoints
+  // Example v1 feature endpoint(s)
   static String get home => '${AppConfig.v1}home/';
-  static String get favorite => '${AppConfig.v1}favorite/';
-  static String get favoriteAdd => favorite;
-  static String favouriteDelete(String id) => '${AppConfig.v1}favorite/$id/delete/';
-  static String productDetail(String id) => '${AppConfig.v1}product/$id/';
 
-  static String subscriptionSync(String id) => '${AppConfig.v1}subscription/$id/sync/';
+  // Notifications (example)
+  static String get notificationsMarkRead =>
+      '${AppConfig.v1}notification/mark-all-as-read/';
 
-  // Notifications
-  static String get notifications => '${AppConfig.api}v1/notification/';
-  static String get notificationsMarkRead => '${AppConfig.api}v1/notification/mark-all-as-read/';
-
-  // Hand Scan (LIST / DETAIL / RECOMMENDATIONS)
-  static String get handScan => '${AppConfig.v1}hand-scan/';
-  static String handScanDetail(String id) => '${AppConfig.v1}hand-scan/$id/';
-  static String handScanRecommendations(String id) =>
-      '${AppConfig.v1}hand-scan/$id/recommendations/';
-
-  // FCM (Future use)
-  static String get fcm => '${AppConfig.root}fcm/';
-  static String get deviceRegister => '${fcm}api/device/register';
-  static String get deviceRegisterOrUpdate => '${fcm}api/device/register-or-change/';
-
-  // Newsletter / Products
-  static String get newsLetterSubscribe => '${AppConfig.v1}newsletter/subscribe/';
-  static String productsHome(String manufacturerQuery) =>
-      '${AppConfig.v1}product-home/?manufacturer=$manufacturerQuery';
-  static String productsHomeV2(String manufacturerQuery) =>
-      '${AppConfig.v1}product-home-v2/?manufacturer=$manufacturerQuery';
-}
-
-class APIWebUrl {
-  static String get protocol => AppConfig.protocol;
-  static String get domain => AppConfig.domain;
-  static String get base => '$protocol://$domain/';
-
-  static String get termsAndConditions => '${base}terms-and-conditions/';
-  static String get privacyPolicy => '${base}privacy-policy/';
-  static String get contactUs => '${base}contact-us/';
-  static String get resetPassword => '${base}accounts/password/reset/';
+  /// Utility: build a fully-qualified URL if you only have a relative path.
+  /// Example: APIUrl.absolute('accounts/auth/login/') -> https://.../api/accounts/auth/login/
+  static String absolute(String relativeWithoutLeadingSlash) {
+    if (relativeWithoutLeadingSlash.startsWith('/')) {
+      return '${AppConfig.api}${relativeWithoutLeadingSlash.substring(1)}';
+    }
+    return '${AppConfig.api}$relativeWithoutLeadingSlash';
+  }
 }

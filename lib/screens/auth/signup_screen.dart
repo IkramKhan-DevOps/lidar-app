@@ -1,13 +1,9 @@
-// =============================================================
-// SIGNUP SCREEN
-// Mirrors login screen UI pattern. Calls signup() in ViewModel.
-// On success: navigates to /home (or back to login if you prefer).
-// =============================================================
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../settings/providers/auth_provider.dart';
-import '../../view_model/auth/auth_state.dart';
+import '../../view_model/states/auth_state.dart';
 
 class SignupScreen extends ConsumerStatefulWidget {
   const SignupScreen({super.key});
@@ -17,106 +13,168 @@ class SignupScreen extends ConsumerStatefulWidget {
 }
 
 class _SignupScreenState extends ConsumerState<SignupScreen> {
-  // ---------------- Controllers ----------------
-  final _emailController = TextEditingController();
-  final _usernameController = TextEditingController(); // optional
-  final _passwordController = TextEditingController();
-  final _confirmController = TextEditingController();
+  final _usernameCtl = TextEditingController();
+  final _emailCtl = TextEditingController();
+  final _pwd1Ctl = TextEditingController();
+  final _pwd2Ctl = TextEditingController();
 
-  // ---------------- UI State ----------------
-  bool _obscurePwd = true;
-  bool _obscureConfirm = true;
+  bool _obscure1 = true;
+  bool _obscure2 = true;
 
   @override
   void dispose() {
-    _emailController.dispose();
-    _usernameController.dispose();
-    _passwordController.dispose();
-    _confirmController.dispose();
+    _usernameCtl.dispose();
+    _emailCtl.dispose();
+    _pwd1Ctl.dispose();
+    _pwd2Ctl.dispose();
     super.dispose();
   }
 
-  // ---------------- ACTION: Signup ----------------
+  bool get _passwordsMatch =>
+      _pwd1Ctl.text.isNotEmpty &&
+          _pwd2Ctl.text.isNotEmpty &&
+          _pwd1Ctl.text == _pwd2Ctl.text;
+
   Future<void> _onSignup() async {
     FocusScope.of(context).unfocus();
-
-    await ref.read(authViewModelProvider.notifier).signup(
-      email: _emailController.text.trim(),
-      password: _passwordController.text,
-      confirmPassword: _confirmController.text,
-      username: _usernameController.text.trim().isEmpty
-          ? null
-          : _usernameController.text.trim(),
+    await ref.read(authViewModelProvider.notifier).register(
+      username: _usernameCtl.text.trim(),
+      email: _emailCtl.text.trim(),
+      password1: _pwd1Ctl.text,
+      password2: _pwd2Ctl.text,
     );
 
     final state = ref.read(authViewModelProvider);
-    if (state.status == AuthStatus.success) {
-      if (mounted) Navigator.of(context).pushReplacementNamed('/home');
-    } else if (state.status == AuthStatus.error) {
-      final msg = state.errorMessage ?? 'Signup failed';
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
+    if (state.flow == AuthFlow.registered) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              state.registrationMessage ??
+                  'Verification e-mail sent. Please check inbox.',
+            ),
+            backgroundColor: Colors.green,
+          ),
+        );
+        Navigator.pop(context);
+      }
+    } else if (state.flow == AuthFlow.error) {
+      final msg = state.error ?? 'Signup failed';
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(msg),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
-  }
-
-  void _goBackToLogin() {
-    Navigator.of(context).pop();
   }
 
   @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authViewModelProvider);
 
-    final canSubmit = _emailController.text.isNotEmpty &&
-        _passwordController.text.isNotEmpty &&
-        _confirmController.text.isNotEmpty &&
+    final canSubmit = _usernameCtl.text.isNotEmpty &&
+        _emailCtl.text.isNotEmpty &&
+        _pwd1Ctl.text.isNotEmpty &&
+        _pwd2Ctl.text.isNotEmpty &&
+        _passwordsMatch &&
         !authState.isSubmitting;
 
     return Scaffold(
       body: Stack(
         children: [
-          // Background
-          SizedBox.expand(
+          // Background image
+          Positioned.fill(
             child: Image.asset(
               'lib/assets/images/login_image.png',
               fit: BoxFit.cover,
             ),
           ),
-          // Gradient overlay
-          Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [Colors.black.withOpacity(0.6), Colors.black.withOpacity(0.4)],
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
+          // Gradient overlay (same style as LoginScreen)
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: const [
+                    Color(0xCC0F172A),
+                    Color(0x990B2540),
+                    Color(0x660F172A),
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
               ),
             ),
           ),
-          // Content
-          Column(
-            children: [
-              const SizedBox(height: 60),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 20),
-                child: _SignupHeader(),
+          // Vignette
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  radius: 1.2,
+                  colors: [
+                    Colors.transparent,
+                    Colors.black.withOpacity(0.45),
+                  ],
+                  center: Alignment.bottomCenter,
+                ),
               ),
-              const Spacer(),
-              _SignupCard(
-                emailController: _emailController,
-                usernameController: _usernameController,
-                passwordController: _passwordController,
-                confirmController: _confirmController,
-                isLoading: authState.isSubmitting,
-                canSubmit: canSubmit,
-                onSubmit: _onSignup,
-                obscurePwd: _obscurePwd,
-                togglePwd: () => setState(() => _obscurePwd = !_obscurePwd),
-                obscureConfirm: _obscureConfirm,
-                toggleConfirm: () =>
-                    setState(() => _obscureConfirm = !_obscureConfirm),
-                onLoginTap: _goBackToLogin,
-              ),
-            ],
+            ),
+          ),
+          SafeArea(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 32),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 28),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const _AppMiniLogo(),
+                      const SizedBox(height: 42),
+                      Text(
+                        'Create Account',
+                        style: Theme.of(context).textTheme.displaySmall?.copyWith(
+                          fontSize: 38,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Text(
+                        'Join the 3D spatial journey.',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: Colors.white70,
+                          fontSize: 15,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Spacer(),
+                _SignupCard(
+                  usernameCtl: _usernameCtl,
+                  emailCtl: _emailCtl,
+                  pwd1Ctl: _pwd1Ctl,
+                  pwd2Ctl: _pwd2Ctl,
+                  obscure1: _obscure1,
+                  obscure2: _obscure2,
+                  toggle1: () => setState(() => _obscure1 = !_obscure1),
+                  toggle2: () => setState(() => _obscure2 = !_obscure2),
+                  isLoading: authState.isSubmitting,
+                  canSubmit: canSubmit,
+                  passwordsMatch: _passwordsMatch,
+                  authError: authState.flow == AuthFlow.error ? authState.error : null,
+                  onSubmit: _onSignup,
+                  onLoginTap: () => Navigator.pop(context),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -124,161 +182,286 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
   }
 }
 
-// ---------------- Header ----------------
-class _SignupHeader extends StatelessWidget {
-  const _SignupHeader();
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: const [
-        SizedBox(height: 20),
-        Text(
-          'Create\nan Account',
-          style: TextStyle(fontSize: 32, color: Colors.white, fontWeight: FontWeight.bold),
-        ),
-        SizedBox(height: 8),
-        Text('Fill the fields to continue', style: TextStyle(color: Colors.white70)),
-      ],
-    );
-  }
-}
+/* ------------------------------- CARD ---------------------------------- */
 
-// ---------------- Signup Card ----------------
 class _SignupCard extends StatelessWidget {
-  final TextEditingController emailController;
-  final TextEditingController usernameController;
-  final TextEditingController passwordController;
-  final TextEditingController confirmController;
+  final TextEditingController usernameCtl;
+  final TextEditingController emailCtl;
+  final TextEditingController pwd1Ctl;
+  final TextEditingController pwd2Ctl;
+  final bool obscure1;
+  final bool obscure2;
+  final VoidCallback toggle1;
+  final VoidCallback toggle2;
   final bool isLoading;
   final bool canSubmit;
+  final bool passwordsMatch;
+  final String? authError;
   final VoidCallback onSubmit;
-  final bool obscurePwd;
-  final bool obscureConfirm;
-  final VoidCallback togglePwd;
-  final VoidCallback toggleConfirm;
   final VoidCallback onLoginTap;
 
   const _SignupCard({
-    super.key,
-    required this.emailController,
-    required this.usernameController,
-    required this.passwordController,
-    required this.confirmController,
+    required this.usernameCtl,
+    required this.emailCtl,
+    required this.pwd1Ctl,
+    required this.pwd2Ctl,
+    required this.obscure1,
+    required this.obscure2,
+    required this.toggle1,
+    required this.toggle2,
     required this.isLoading,
     required this.canSubmit,
+    required this.passwordsMatch,
     required this.onSubmit,
-    required this.obscurePwd,
-    required this.obscureConfirm,
-    required this.togglePwd,
-    required this.toggleConfirm,
     required this.onLoginTap,
+    required this.authError,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      width: double.infinity,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
-      ),
-      child: SingleChildScrollView(
-        child: Column(
-          children: [
-            _Field(
-              label: 'Email',
-              controller: emailController,
-              keyboardType: TextInputType.emailAddress,
-              hintText: 'example@gmail.com',
+    final hasPwdInput = pwd1Ctl.text.isNotEmpty;
+
+    final strengthValue = _strengthValue(pwd1Ctl.text);
+    final strengthLabel = _strengthLabel(pwd1Ctl.text);
+    final strengthColor = _strengthColor(strengthLabel);
+
+    return ClipRRect(
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(34)),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(26, 30, 26, 36),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.07),
+            border: Border(
+              top: BorderSide(color: Colors.white.withOpacity(0.12), width: 1),
             ),
-            const SizedBox(height: 16),
-            _Field(
-              label: 'Username (optional)',
-              controller: usernameController,
-              hintText: 'Choose a username',
-            ),
-            const SizedBox(height: 16),
-            _Field(
-              label: 'Password',
-              controller: passwordController,
-              obscureText: obscurePwd,
-              suffixIcon: IconButton(
-                icon: Icon(
-                  obscurePwd ? Icons.visibility_off : Icons.visibility,
-                  color: Colors.grey[600],
-                ),
-                onPressed: togglePwd,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.25),
+                blurRadius: 28,
+                offset: const Offset(0, -4),
               ),
-            ),
-            const SizedBox(height: 16),
-            _Field(
-              label: 'Confirm Password',
-              controller: confirmController,
-              obscureText: obscureConfirm,
-              suffixIcon: IconButton(
-                icon: Icon(
-                  obscureConfirm ? Icons.visibility_off : Icons.visibility,
-                  color: Colors.grey[600],
+            ],
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _Field(
+                  label: 'Username',
+                  controller: usernameCtl,
+                  hintText: 'your_username',
                 ),
-                onPressed: toggleConfirm,
-              ),
-            ),
-            const SizedBox(height: 24),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: canSubmit ? onSubmit : null,
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  backgroundColor: const Color(0xFF008CFF),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
+                const SizedBox(height: 18),
+                _Field(
+                  label: 'Email',
+                  controller: emailCtl,
+                  keyboardType: TextInputType.emailAddress,
+                  hintText: 'you@example.com',
+                ),
+                const SizedBox(height: 18),
+                _Field(
+                  label: 'Password',
+                  controller: pwd1Ctl,
+                  obscureText: obscure1,
+                  hintText: '••••••••',
+                  suffixIcon: IconButton(
+                    splashRadius: 20,
+                    icon: Icon(
+                      obscure1
+                          ? Icons.visibility_off_rounded
+                          : Icons.visibility_rounded,
+                      color: Colors.white70,
+                    ),
+                    onPressed: toggle1,
                   ),
-                  elevation: 3,
                 ),
-                child: isLoading
-                    ? const SizedBox(
-                  height: 22,
-                  width: 22,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2.5,
-                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                // Strength indicator
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 240),
+                  child: hasPwdInput
+                      ? Padding(
+                    key: ValueKey(strengthLabel),
+                    padding: const EdgeInsets.only(top: 10),
+                    child: Column(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: LinearProgressIndicator(
+                            value: strengthValue,
+                            minHeight: 6,
+                            backgroundColor: Colors.white12,
+                            valueColor: AlwaysStoppedAnimation(strengthColor),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            Icon(Icons.security_rounded,
+                                size: 16, color: strengthColor),
+                            const SizedBox(width: 6),
+                            Text(
+                              strengthLabel,
+                              style: TextStyle(
+                                color: strengthColor,
+                                fontSize: 12.3,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 0.3,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  )
+                      : const SizedBox(height: 4),
+                ),
+                const SizedBox(height: 18),
+                _Field(
+                  label: 'Confirm Password',
+                  controller: pwd2Ctl,
+                  obscureText: obscure2,
+                  hintText: '••••••••',
+                  suffixIcon: IconButton(
+                    splashRadius: 20,
+                    icon: Icon(
+                      obscure2
+                          ? Icons.visibility_off_rounded
+                          : Icons.visibility_rounded,
+                      color: Colors.white70,
+                    ),
+                    onPressed: toggle2,
                   ),
-                )
-                    : const Text('Sign up',
-                    style: TextStyle(fontSize: 16, color: Colors.white)),
-              ),
-            ),
-            const SizedBox(height: 12),
-            GestureDetector(
-              onTap: onLoginTap,
-              child: RichText(
-                text: const TextSpan(
-                  text: 'Already have an account? ',
-                  style: TextStyle(color: Colors.black87),
-                  children: [
-                    TextSpan(
-                      text: 'Log in',
+                ),
+                if (pwd2Ctl.text.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Row(
+                      children: [
+                        Icon(
+                          passwordsMatch
+                              ? Icons.check_circle_rounded
+                              : Icons.error_outline_rounded,
+                          size: 18,
+                          color: passwordsMatch
+                              ? Colors.greenAccent
+                              : Colors.orangeAccent,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          passwordsMatch
+                              ? 'Passwords match'
+                              : 'Passwords do not match',
+                          style: TextStyle(
+                            color: passwordsMatch
+                                ? Colors.greenAccent
+                                : Colors.orangeAccent,
+                            fontSize: 12.6,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                if (authError != null) ...[
+                  const SizedBox(height: 18),
+                  _InlineBanner(
+                    color: Colors.redAccent,
+                    icon: Icons.error_outline_rounded,
+                    text: authError!,
+                  ),
+                ],
+                const SizedBox(height: 26),
+                _PrimaryGradientButton(
+                  enabled: canSubmit,
+                  isLoading: isLoading,
+                  onPressed: canSubmit ? onSubmit : null,
+                  label: 'Sign Up',
+                ),
+                const SizedBox(height: 22),
+                GestureDetector(
+                  onTap: onLoginTap,
+                  child: RichText(
+                    text: const TextSpan(
+                      text: 'Already have an account? ',
                       style: TextStyle(
-                        color: Color(0xFF008CFF),
-                        fontWeight: FontWeight.w600,
+                        color: Colors.white70,
+                        fontSize: 13.5,
+                        letterSpacing: 0.2,
                       ),
-                    )
-                  ],
+                      children: [
+                        TextSpan(
+                          text: 'Log in',
+                          style: TextStyle(
+                            color: Color(0xFF60A5FA),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
+                const SizedBox(height: 4),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
   }
+
+  // Helpers for strength
+  static double _strengthValue(String p) {
+    if (p.isEmpty) return 0;
+    int s = 0;
+    if (p.length >= 8) s++;
+    if (RegExp(r'[A-Z]').hasMatch(p)) s++;
+    if (RegExp(r'[0-9]').hasMatch(p)) s++;
+    if (RegExp(r'[!@#\$%^&*(),.?":{}|<>_\-+=;]').hasMatch(p)) s++;
+    return (s / 4).clamp(0, 1).toDouble();
+  }
+
+  static String _strengthLabel(String p) {
+    if (p.isEmpty) return '';
+    int s = 0;
+    if (p.length >= 8) s++;
+    if (RegExp(r'[A-Z]').hasMatch(p)) s++;
+    if (RegExp(r'[0-9]').hasMatch(p)) s++;
+    if (RegExp(r'[!@#\$%^&*(),.?":{}|<>_\-+=;]').hasMatch(p)) s++;
+    switch (s) {
+      case 0:
+      case 1:
+        return 'Weak';
+      case 2:
+        return 'Fair';
+      case 3:
+        return 'Good';
+      default:
+        return 'Strong';
+    }
+  }
+
+  static Color _strengthColor(String label) {
+    switch (label) {
+      case 'Weak':
+        return Colors.redAccent;
+      case 'Fair':
+        return Colors.orangeAccent;
+      case 'Good':
+        return Colors.amber;
+      case 'Strong':
+        return Colors.greenAccent;
+      default:
+        return Colors.transparent;
+    }
+  }
 }
 
-// ---------------- Reusable Field ----------------
-class _Field extends StatelessWidget {
+/* ----------------------------- COMPONENTS ------------------------------ */
+
+class _Field extends StatefulWidget {
   final String label;
   final TextEditingController controller;
   final String? hintText;
@@ -287,7 +470,6 @@ class _Field extends StatelessWidget {
   final TextInputType? keyboardType;
 
   const _Field({
-    super.key,
     required this.label,
     required this.controller,
     this.hintText,
@@ -297,28 +479,219 @@ class _Field extends StatelessWidget {
   });
 
   @override
+  State<_Field> createState() => _FieldState();
+}
+
+class _FieldState extends State<_Field> {
+  @override
   Widget build(BuildContext context) {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(label,
-          style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.w500)),
-      const SizedBox(height: 8),
-      TextField(
-        controller: controller,
-        obscureText: obscureText,
-        keyboardType: keyboardType,
-        decoration: InputDecoration(
-          hintText: hintText,
-          suffixIcon: suffixIcon,
-          filled: true,
-          fillColor: Colors.grey[100],
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: BorderSide.none,
+    final labelStyle = TextStyle(
+      color: Colors.white.withOpacity(0.85),
+      fontWeight: FontWeight.w500,
+      fontSize: 13.3,
+      letterSpacing: 0.2,
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(widget.label, style: labelStyle),
+        const SizedBox(height: 8),
+        TextField(
+          controller: widget.controller,
+          obscureText: widget.obscureText,
+          keyboardType: widget.keyboardType,
+          style: const TextStyle(color: Colors.white, fontSize: 15),
+          decoration: InputDecoration(
+            hintText: widget.hintText,
+            hintStyle: const TextStyle(color: Colors.white54),
+            suffixIcon: widget.suffixIcon,
+            filled: true,
+            fillColor: Colors.white.withOpacity(0.08),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 16,
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(16),
+              borderSide: BorderSide(color: Colors.white.withOpacity(0.18)),
+            ),
+            focusedBorder: const OutlineInputBorder(
+              borderRadius: BorderRadius.all(Radius.circular(16)),
+              borderSide: BorderSide(color: Color(0xFF3B82F6), width: 1.4),
+            ),
+          ),
+          onChanged: (_) => setState(() {}),
+        ),
+      ],
+    );
+  }
+}
+
+class _PrimaryGradientButton extends StatelessWidget {
+  final bool enabled;
+  final bool isLoading;
+  final VoidCallback? onPressed;
+  final String label;
+
+  const _PrimaryGradientButton({
+    required this.enabled,
+    required this.isLoading,
+    required this.onPressed,
+    required this.label,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final container = AnimatedContainer(
+      duration: const Duration(milliseconds: 250),
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 16),
+      decoration: BoxDecoration(
+        gradient: enabled
+            ? const LinearGradient(
+          colors: [
+            Color(0xFF2563EB),
+            Color(0xFF3B82F6),
+            Color(0xFF60A5FA),
+          ],
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+        )
+            : LinearGradient(
+          colors: [
+            Colors.blueGrey.shade700,
+            Colors.blueGrey.shade600,
+          ],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: enabled
+            ? [
+          BoxShadow(
+            color: const Color(0xFF2563EB).withOpacity(0.35),
+            blurRadius: 18,
+            offset: const Offset(0, 6),
+          ),
+        ]
+            : [],
+      ),
+      child: Center(
+        child: isLoading
+            ? const SizedBox(
+          height: 22,
+          width: 22,
+          child: CircularProgressIndicator(
+            strokeWidth: 2.7,
+            valueColor: AlwaysStoppedAnimation(Colors.white),
+          ),
+        )
+            : Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 16.2,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.4,
           ),
         ),
-        onChanged: (_) => (context as Element).markNeedsBuild(),
       ),
-    ]);
+    );
+
+    return Opacity(
+      opacity: enabled ? 1 : 0.55,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: enabled && !isLoading ? onPressed : null,
+        child: container,
+      ),
+    );
+  }
+}
+
+class _InlineBanner extends StatelessWidget {
+  final Color color;
+  final IconData icon;
+  final String text;
+  const _InlineBanner({
+    required this.color,
+    required this.icon,
+    required this.text,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.16),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.4)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                color: color,
+                fontSize: 12.8,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.2,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AppMiniLogo extends StatelessWidget {
+  const _AppMiniLogo();
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          height: 42,
+          width: 42,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: const LinearGradient(
+              colors: [
+                Color(0xFF2563EB),
+                Color(0xFF3B82F6),
+                Color(0xFF60A5FA),
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF3B82F6).withOpacity(0.35),
+                blurRadius: 14,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: const Icon(
+            Icons.travel_explore_rounded,
+            color: Colors.white,
+            size: 22,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Text(
+          'WebGIS 3D',
+          style: Theme.of(context).textTheme.titleLarge?.copyWith(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.6,
+          ),
+        ),
+      ],
+    );
   }
 }

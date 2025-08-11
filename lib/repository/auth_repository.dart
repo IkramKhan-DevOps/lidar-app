@@ -1,75 +1,78 @@
-// =============================================================
-// AUTH REPOSITORY
-// Bridges NetworkApiService and ViewModels.
-// Contains business logic for login & signup.
-// =============================================================
 import '../core/network/api_network_base.dart';
 import '../core/network/api_urls.dart';
 import '../core/storage/auth_storage.dart';
-
-
 class AuthRepository {
   final BaseApiService api;
   AuthRepository(this.api);
 
-  // ---------------- LOGIN ----------------
-  // Body expected by backend: { "email": "...", "password": "..." }
-  // Response: { "key": "TOKEN" }
   Future<String> login({
     required String email,
     required String password,
   }) async {
     final body = {'email': email, 'password': password};
     final res = await api.postAPI(APIUrl.signIn, body, false, false);
-
     if (res is Map && res['key'] != null) {
       final token = res['key'] as String;
-      await AuthToken.save(token);
+      await AuthToken.saveToken(token);
       return token;
     }
     throw Exception('Token not found in login response');
   }
 
-  // ---------------- SIGNUP ----------------
-  // VARIANT B (single password) used here:
-  // Body: { "email": "...", "password": "...", "username": "optional" }
-  // If your backend requires password1/password2 (Variant A),
-  // use the commented block below instead and remove this body.
-  Future<String> signup({
+  Future<String> register({
+    required String username,
     required String email,
-    required String password,
-    required String confirmPassword,
-    String? username,
+    required String password1,
+    required String password2,
   }) async {
-    // ---------- Variant A (if backend requires password1/password2) ----------
-    // final body = {
-    //   'email': email,
-    //   'password1': password,
-    //   'password2': confirmPassword,
-    //   if (username != null && username.isNotEmpty) 'username': username,
-    // };
-
-    // ---------- Variant B (single password) ----------
     final body = {
+      'username': username,
       'email': email,
-      'password': password,
-      if (username != null && username.isNotEmpty) 'username': username,
-      // If backend has separate confirm field:
-      // 'password2': confirmPassword,
+      'password1': password1,
+      'password2': password2,
     };
-
-    final resJson = await api.postAPI(APIUrl.signUp, body, false, false);
-
-    if (resJson is Map && resJson['key'] != null) {
-      final token = resJson['key'] as String;
-      await AuthToken.save(token);
-      return token;
+    final res = await api.postAPI(APIUrl.signUp, body, false, false);
+    if (res is Map && res['detail'] != null) {
+      return res['detail'].toString();
     }
-    throw Exception('Token not found in signup response');
+    throw Exception('Unexpected registration response');
   }
 
-  // ---------------- LOGOUT ----------------
+  Future<String> logoutRemote({String? csrfToken}) async {
+    final res = await api.postAPI(APIUrl.logout, {}, true, false);
+    if (res is Map && res['detail'] != null) {
+      return res['detail'].toString();
+    }
+    return 'Logged out';
+  }
+
   Future<void> logout() async {
-    await AuthToken.clear();
+    await AuthToken.removeToken();
+  }
+
+  Future<String> changePassword({
+    required String newPassword1,
+    required String newPassword2,
+  }) async {
+    final body = {
+      'new_password1': newPassword1,
+      'new_password2': newPassword2,
+    };
+    final res = await api.postAPI(APIUrl.passwordChange, body, true, false);
+    if (res is Map) {
+      if (res['detail'] != null) return res['detail'].toString();
+      throw Exception(res.toString());
+    }
+    throw Exception('Unexpected response for password change');
+  }
+
+  // NEW: request password reset email
+  Future<String> requestPasswordReset({required String email}) async {
+    final body = {'email': email};
+    final res = await api.postAPI(APIUrl.passwordReset, body, false, false);
+    if (res is Map && res['detail'] != null) {
+      return res['detail'].toString(); // e.g. "Password reset e-mail has been sent."
+    }
+    throw Exception('Unexpected password reset response');
   }
 }

@@ -2,6 +2,7 @@
 // CUSTOM EXCEPTIONS (OPTIONAL)
 // Used by NetworkApiService to throw typed errors.
 // =============================================================
+
 class FetchDataException implements Exception {
   final String message;
   FetchDataException(this.message);
