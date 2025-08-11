@@ -16,7 +16,7 @@ class LoginNotifier extends StateNotifier<bool> {
     state = true; // Set loading to true
     try {
       var response = await apiServices.postAPI(APIUrl.signIn, data);
-      await AuthToken.saveToken(response['key']);
+      await AuthToken.save(response['key']);
       await AuthToken.checkLoginStatus(context);
     } catch (error) {
       Toast.show(context, error.toString(), 'danger');

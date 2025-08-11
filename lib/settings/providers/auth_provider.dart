@@ -1,3 +1,9 @@
+// =============================================================
+// AUTH PROVIDERS (Riverpod)
+// Expose NetworkApiService, Repository, and ViewModel as providers.
+// UI listens to authViewModelProvider for AuthState.
+// =============================================================
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/network/api_network.dart';

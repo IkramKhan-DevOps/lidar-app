@@ -1,29 +1,24 @@
-class AppException implements Exception {
-
-  final _message;
-  final _prefix;
-
-  AppException([this._message, this._prefix]);
-
+// =============================================================
+// CUSTOM EXCEPTIONS (OPTIONAL)
+// Used by NetworkApiService to throw typed errors.
+// =============================================================
+class FetchDataException implements Exception {
+  final String message;
+  FetchDataException(this.message);
   @override
-  String toString() {
-    return '$_prefix$_message';
-  }
-
+  String toString() => 'FetchDataException: $message';
 }
 
-class FetchDataException extends AppException {
-  FetchDataException([String? message]) : super(message, '');
+class BadRequestException implements Exception {
+  final String message;
+  BadRequestException(this.message);
+  @override
+  String toString() => 'BadRequestException: $message';
 }
 
-class BadRequestException extends AppException {
-  BadRequestException([String? message]) : super(message, 'Invalid Request');
-}
-
-class UnauthorizedException extends AppException {
-  UnauthorizedException([String? message]) : super(message, 'Unauthorized Request');
-}
-
-class InvalidInputException extends AppException {
-  InvalidInputException([String? message]) : super(message, 'Invalid Inputs');
+class UnauthorizedException implements Exception {
+  final String message;
+  UnauthorizedException(this.message);
+  @override
+  String toString() => 'UnauthorizedException: $message';
 }

@@ -1,13 +1,18 @@
+// =============================================================
+// AUTH STATE (Immutable)
+// Represents UI state for login & signup flows.
+// =============================================================
 import '../../models/auth_user.dart';
 
 enum AuthStatus { idle, loading, success, error }
 
 class AuthState {
   final AuthStatus status;
-  final AuthUser? user;
-  final String? errorMessage;
-  final bool isSubmitting;
-  final String? token; // store token if needed
+  final AuthUser? user;         // Future use (profile)
+  final String? errorMessage;   // Human-readable error
+  final bool isSubmitting;      // For button disabling/spinner
+  final String? token;          // Saved token
+  final bool isSignupFlow;      // Distinguish which action produced success/error
 
   const AuthState({
     this.status = AuthStatus.idle,
@@ -15,6 +20,7 @@ class AuthState {
     this.errorMessage,
     this.isSubmitting = false,
     this.token,
+    this.isSignupFlow = false,
   });
 
   AuthState copyWith({
@@ -23,6 +29,7 @@ class AuthState {
     String? errorMessage,
     bool? isSubmitting,
     String? token,
+    bool? isSignupFlow,
   }) {
     return AuthState(
       status: status ?? this.status,
@@ -30,6 +37,7 @@ class AuthState {
       errorMessage: errorMessage,
       isSubmitting: isSubmitting ?? this.isSubmitting,
       token: token ?? this.token,
+      isSignupFlow: isSignupFlow ?? this.isSignupFlow,
     );
   }
 
