@@ -1,3 +1,36 @@
+// =============================================================
+// LOGIN SCREEN
+// Branded authentication entry with Riverpod integration and a
+// "Forgot password" bottom sheet.
+// =============================================================
+//
+// FLOW OVERVIEW
+// - User enters email + password.
+// - "Sign In" triggers authViewModelProvider.notifier.login(...).
+// - On success -> navigates to Home; on error -> shows snackbar.
+// - "Forgot password?" opens a glass-style bottom sheet to request
+//   a reset link.
+//
+// INTEGRATION
+// - State observed via authViewModelProvider (Riverpod).
+// - Actions dispatched via its notifier.
+// - Forgot password uses forgotPasswordViewModelProvider.
+//
+// UI LAYERS
+// - Fullscreen background image
+// - Brand gradient overlay
+// - Bottom vignette (radial shade)
+// - Glass login card docked to the bottom
+//
+// SAFETY
+// - TextEditingControllers disposed in dispose().
+// - mounted checks before navigation/snackbars.
+//
+// NOTE
+// - Only comments were added for clarity. No logic changes.
+// - Duplicate imports from the provided snippet are preserved intentionally.
+// =============================================================
+
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -10,16 +43,6 @@ import 'signup_screen.dart';
 // UPDATED: Added forgot password bottom sheet wiring.
 // Only changed parts are commented with // NEW or // UPDATED.
 
-import 'dart:ui';
-import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:platform_channel_swift_demo/core/configs/app_routes.dart';
-
-import '../../settings/providers/auth_provider.dart';
-import '../../view_model/states/auth_state.dart';
-import '../../view_model/auth/forgot_password_view_model.dart'; // NEW
-import 'signup_screen.dart';
-
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
 
@@ -28,17 +51,28 @@ class LoginScreen extends ConsumerStatefulWidget {
 }
 
 class _LoginScreenState extends ConsumerState<LoginScreen> {
+  // -------------------- CONTROLLERS --------------------
+  // Holds input for email + password fields.
   final _emailCtl = TextEditingController();
   final _pwdCtl = TextEditingController();
+
+  // Toggles password visibility for the password field.
   bool _obscure = true;
 
   @override
   void dispose() {
+    // Prevent memory leaks by disposing controllers.
     _emailCtl.dispose();
     _pwdCtl.dispose();
     super.dispose();
   }
 
+  // =============================================================
+  // ACTION: Attempt login via ViewModel
+  // - Unfocus keyboard
+  // - Call login(...)
+  // - Navigate on success; show error on failure
+  // =============================================================
   Future<void> _onLogin() async {
     FocusScope.of(context).unfocus();
     await ref.read(authViewModelProvider.notifier).login(
@@ -55,18 +89,27 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     }
   }
 
+  // Convenience method to show an error snackbar.
   void _showSnack(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
+
       SnackBar(content: Text(msg), backgroundColor: Colors.red),
     );
   }
 
+  // Navigate to Signup screen.
   void _goToSignup() {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const SignupScreen()),
     );
   }
 
+  // =============================================================
+  // UI: Forgot Password bottom sheet
+  // - Clears previous state
+  // - Opens a glass-styled modal with email input
+  // - Submits to send reset link (if valid)
+  // =============================================================
   // NEW: open forgot password sheet
   void _showForgotPasswordSheet() {
     ref.read(forgotPasswordViewModelProvider.notifier).clear();
@@ -81,7 +124,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Observe auth state for loading and flow.
     final auth = ref.watch(authViewModelProvider);
+
+    // Enable button only when inputs are present and not submitting.
     final canSubmit = _emailCtl.text.isNotEmpty &&
         _pwdCtl.text.isNotEmpty &&
         !auth.isSubmitting;
@@ -89,12 +135,15 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     return Scaffold(
       body: Stack(
         children: [
+          // -------------------- LAYER 1: BACKGROUND IMAGE --------------------
           Positioned.fill(
             child: Image.asset(
               'lib/assets/images/login_image.png',
               fit: BoxFit.cover,
             ),
           ),
+
+          // -------------------- LAYER 2: BRAND GRADIENT OVERLAY --------------------
           Positioned.fill(
             child: DecoratedBox(
               decoration: BoxDecoration(
@@ -110,6 +159,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               ),
             ),
           ),
+
+          // -------------------- LAYER 3: VIGNETTE (BOTTOM RADIAL SHADE) --------------------
           Positioned.fill(
             child: Container(
               decoration: BoxDecoration(
@@ -124,11 +175,15 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               ),
             ),
           ),
+
+          // -------------------- MAIN CONTENT --------------------
           SafeArea(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const SizedBox(height: 32),
+
+                // Header: logo + copy
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 28),
                   child: Column(
@@ -157,7 +212,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     ],
                   ),
                 ),
+
                 const Spacer(),
+
+                // Bottom glass login card with fields and actions.
                 _LoginCard(
                   emailCtl: _emailCtl,
                   pwdCtl: _pwdCtl,
@@ -178,6 +236,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/*                                   CARD                                     */
+/* -------------------------------------------------------------------------- */
+// Glass-styled bottom sheet-like card containing the login form, CTA, and links.
 class _LoginCard extends StatelessWidget {
   final TextEditingController emailCtl;
   final TextEditingController pwdCtl;
@@ -227,13 +289,17 @@ class _LoginCard extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // Email field
               _Field(
                 label: 'Email',
                 controller: emailCtl,
                 keyboardType: TextInputType.emailAddress,
                 hintText: 'you@example.com',
               ),
+
               const SizedBox(height: 18),
+
+              // Password field with visibility toggle
               _Field(
                 label: 'Password',
                 controller: pwdCtl,
@@ -248,7 +314,10 @@ class _LoginCard extends StatelessWidget {
                   onPressed: toggleObscure,
                 ),
               ),
+
               const SizedBox(height: 8),
+
+              // "Forgot password?" link aligned to the right.
               Align(
                 alignment: Alignment.centerRight,
                 child: TextButton(
@@ -268,14 +337,20 @@ class _LoginCard extends StatelessWidget {
                   ),
                 ),
               ),
+
               const SizedBox(height: 10),
+
+              // Primary "Sign In" CTA
               _PrimaryGradientButton(
                 enabled: canSubmit,
                 onPressed: canSubmit ? onSubmit : null,
                 isLoading: isLoading,
                 label: 'Sign In',
               ),
+
               const SizedBox(height: 22),
+
+              // Link to Signup
               GestureDetector(
                 onTap: onSignupTap,
                 child: RichText(
@@ -298,6 +373,7 @@ class _LoginCard extends StatelessWidget {
                   ),
                 ),
               ),
+
               const SizedBox(height: 4),
             ],
           ),
@@ -309,7 +385,11 @@ class _LoginCard extends StatelessWidget {
   }
 }
 
-// Bottom sheet for Forgot Password
+/* -------------------------------------------------------------------------- */
+/*                         FORGOT PASSWORD BOTTOM SHEET                       */
+/* -------------------------------------------------------------------------- */
+// Glass-style modal for requesting a password reset link.
+// Validates email, submits via ViewModel, and closes on success.
 class _ForgotPasswordSheet extends ConsumerWidget {
   const _ForgotPasswordSheet({super.key});
 
@@ -323,6 +403,7 @@ class _ForgotPasswordSheet extends ConsumerWidget {
     final canSubmit = emailValid && !state.submitting;
 
     return Padding(
+      // Make space for the keyboard.
       padding: EdgeInsets.only(
         bottom: MediaQuery.of(context).viewInsets.bottom,
       ),
@@ -348,6 +429,7 @@ class _ForgotPasswordSheet extends ConsumerWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                // Grabber
                 Container(
                   width: 44,
                   height: 4,
@@ -357,6 +439,8 @@ class _ForgotPasswordSheet extends ConsumerWidget {
                     borderRadius: BorderRadius.circular(4),
                   ),
                 ),
+
+                // Title
                 Row(
                   children: const [
                     Icon(Icons.lock_open_rounded,
@@ -372,7 +456,10 @@ class _ForgotPasswordSheet extends ConsumerWidget {
                     ),
                   ],
                 ),
+
                 const SizedBox(height: 8),
+
+                // Support text
                 const Text(
                   'Enter the email linked to your account. We will send a reset link if it exists.',
                   style: TextStyle(
@@ -381,7 +468,10 @@ class _ForgotPasswordSheet extends ConsumerWidget {
                     height: 1.25,
                   ),
                 ),
+
                 const SizedBox(height: 22),
+
+                // Email label + field
                 Align(
                   alignment: Alignment.centerLeft,
                   child: Text(
@@ -417,6 +507,7 @@ class _ForgotPasswordSheet extends ConsumerWidget {
                       borderSide:
                       BorderSide(color: Color(0xFF3B82F6), width: 1.3),
                     ),
+                    // Simple validity icon feedback.
                     suffixIcon: email.isEmpty
                         ? null
                         : Icon(
@@ -429,6 +520,8 @@ class _ForgotPasswordSheet extends ConsumerWidget {
                     ),
                   ),
                 ),
+
+                // Inline feedback banners.
                 if (state.errorMessage != null) ...[
                   const SizedBox(height: 14),
                   _Banner(
@@ -445,7 +538,10 @@ class _ForgotPasswordSheet extends ConsumerWidget {
                     text: state.successMessage!,
                   )
                 ],
+
                 const SizedBox(height: 26),
+
+                // Submit button (enabled only when email is valid).
                 Opacity(
                   opacity: canSubmit ? 1 : 0.55,
                   child: InkWell(
@@ -456,6 +552,7 @@ class _ForgotPasswordSheet extends ConsumerWidget {
                       final s =
                       ref.read(forgotPasswordViewModelProvider);
                       if (s.successMessage != null) {
+                        // Give a moment to read the success message, then close sheet.
                         await Future.delayed(
                             const Duration(milliseconds: 1200));
                         if (Navigator.of(context).canPop()) {
@@ -521,7 +618,10 @@ class _ForgotPasswordSheet extends ConsumerWidget {
                     ),
                   ),
                 ),
+
                 const SizedBox(height: 8),
+
+                // Close the sheet without action.
                 TextButton(
                   onPressed: () => Navigator.of(context).maybePop(),
                   style: TextButton.styleFrom(foregroundColor: Colors.white70),
@@ -538,6 +638,7 @@ class _ForgotPasswordSheet extends ConsumerWidget {
     );
   }
 
+  // Basic email format validation.
   static bool _validEmail(String e) {
     if (e.isEmpty) return false;
     final re = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
@@ -545,6 +646,10 @@ class _ForgotPasswordSheet extends ConsumerWidget {
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/*                                  BANNER                                    */
+/* -------------------------------------------------------------------------- */
+// Small inline alert used for success/error feedback in the sheet.
 class _Banner extends StatelessWidget {
   final Color color;
   final IconData icon;
@@ -587,6 +692,10 @@ class _Banner extends StatelessWidget {
 // Keep _PrimaryGradientButton, _Field, _AppMiniLogo unchanged below...
 // (They are already defined above in your file.)
 
+/* -------------------------------------------------------------------------- */
+/*                           PRIMARY GRADIENT BUTTON                          */
+/* -------------------------------------------------------------------------- */
+// Reusable CTA with loading spinner and gradient/shadow polish.
 class _PrimaryGradientButton extends StatelessWidget {
   final bool enabled;
   final bool isLoading;
@@ -667,6 +776,11 @@ class _PrimaryGradientButton extends StatelessWidget {
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/*                                     FIELD                                  */
+/* -------------------------------------------------------------------------- */
+// Labeled text field with glass fill and optional suffix icon.
+// Note: onChanged forces a rebuild to refresh button enabling state.
 class _Field extends StatelessWidget {
   final String label;
   final TextEditingController controller;
@@ -723,6 +837,7 @@ class _Field extends StatelessWidget {
               borderSide: const BorderSide(color: Color(0xFF3B82F6), width: 1.4),
             ),
           ),
+          // Simple rebuild to reflect text presence in "canSubmit".
           onChanged: (_) => (context as Element).markNeedsBuild(),
         ),
       ],
@@ -730,6 +845,10 @@ class _Field extends StatelessWidget {
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/*                                MINI LOGO                                   */
+/* -------------------------------------------------------------------------- */
+// Compact brand mark (gradient badge + wordmark) used in the header.
 class _AppMiniLogo extends StatelessWidget {
   const _AppMiniLogo();
 
@@ -737,6 +856,7 @@ class _AppMiniLogo extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
+        // Circular gradient badge with app icon.
         Container(
           height: 42,
           width: 42,
@@ -763,6 +883,7 @@ class _AppMiniLogo extends StatelessWidget {
               color: Colors.white, size: 22),
         ),
         const SizedBox(width: 12),
+        // Wordmark
         Text(
           'WebGIS 3D',
           style: Theme.of(context).textTheme.titleLarge?.copyWith(

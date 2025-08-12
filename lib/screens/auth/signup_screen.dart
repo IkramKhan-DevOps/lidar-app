@@ -1,3 +1,35 @@
+// =============================================================
+// SIGNUP SCREEN
+// User registration UI with password strength meter and Riverpod
+// integration. Mirrors the visual style of the login screen.
+// =============================================================
+//
+// FLOW OVERVIEW
+// - User enters username, email, password, and confirm password.
+// - Password strength and "passwords match" feedback update live.
+// - On "Sign Up", calls register(...) on authViewModelProvider.
+// - On success: shows a snackbar (e-mail verification notice) and pops.
+// - On error: shows inline error banner and snackbar.
+//
+// INTEGRATION
+// - State is read via Riverpod: authViewModelProvider.
+// - Actions are invoked on its notifier: register(...).
+//
+// UI LAYERS
+// - Background image
+// - Gradient overlay (brand tint)
+// - Vignette (radial shade at bottom)
+// - Glass-like top card containing inputs
+//
+// SAFETY
+// - Controllers disposed in dispose().
+// - mounted checks are used before showing snackbar/navigating.
+//
+// TWEAKS
+// - Adjust texts, gradients, and opacities to match branding.
+// - Replace asset path for the background if needed.
+// =============================================================
+
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -13,16 +45,21 @@ class SignupScreen extends ConsumerStatefulWidget {
 }
 
 class _SignupScreenState extends ConsumerState<SignupScreen> {
+  // -------------------- TEXT CONTROLLERS --------------------
+  // Hold the input text for the form fields.
   final _usernameCtl = TextEditingController();
   final _emailCtl = TextEditingController();
   final _pwd1Ctl = TextEditingController();
   final _pwd2Ctl = TextEditingController();
 
+  // -------------------- PASSWORD VISIBILITY --------------------
+  // Toggles for "eye" icons on password fields.
   bool _obscure1 = true;
   bool _obscure2 = true;
 
   @override
   void dispose() {
+    // Always dispose controllers to avoid memory leaks.
     _usernameCtl.dispose();
     _emailCtl.dispose();
     _pwd1Ctl.dispose();
@@ -30,13 +67,20 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
     super.dispose();
   }
 
+  // -------------------- VALIDATION HELPERS --------------------
+  // Quick check to ensure both passwords are non-empty and equal.
   bool get _passwordsMatch =>
       _pwd1Ctl.text.isNotEmpty &&
           _pwd2Ctl.text.isNotEmpty &&
           _pwd1Ctl.text == _pwd2Ctl.text;
 
+  // -------------------- SUBMIT HANDLER --------------------
+  // Orchestrates the signup action and handles success/error UX.
   Future<void> _onSignup() async {
+    // Dismiss the keyboard.
     FocusScope.of(context).unfocus();
+
+    // Fire registration via Riverpod notifier.
     await ref.read(authViewModelProvider.notifier).register(
       username: _usernameCtl.text.trim(),
       email: _emailCtl.text.trim(),
@@ -44,8 +88,11 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
       password2: _pwd2Ctl.text,
     );
 
+    // Read the latest state (flow + messages).
     final state = ref.read(authViewModelProvider);
+
     if (state.flow == AuthFlow.registered) {
+      // Success: inform user and return to previous screen.
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -59,6 +106,7 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
         Navigator.pop(context);
       }
     } else if (state.flow == AuthFlow.error) {
+      // Failure: display the error.
       final msg = state.error ?? 'Signup failed';
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -73,8 +121,10 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Observe auth state for loading and error handling.
     final authState = ref.watch(authViewModelProvider);
 
+    // Determine whether the "Sign Up" button should be enabled.
     final canSubmit = _usernameCtl.text.isNotEmpty &&
         _emailCtl.text.isNotEmpty &&
         _pwd1Ctl.text.isNotEmpty &&
@@ -85,14 +135,15 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
     return Scaffold(
       body: Stack(
         children: [
-          // Background image
+          // -------------------- LAYER 1: BACKGROUND IMAGE --------------------
           Positioned.fill(
             child: Image.asset(
               'lib/assets/images/login_image.png',
               fit: BoxFit.cover,
             ),
           ),
-          // Gradient overlay (same style as LoginScreen)
+
+          // -------------------- LAYER 2: BRAND GRADIENT OVERLAY --------------------
           Positioned.fill(
             child: DecoratedBox(
               decoration: BoxDecoration(
@@ -108,7 +159,8 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
               ),
             ),
           ),
-          // Vignette
+
+          // -------------------- LAYER 3: VIGNETTE (BOTTOM RADIAL SHADE) --------------------
           Positioned.fill(
             child: Container(
               decoration: BoxDecoration(
@@ -123,11 +175,15 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
               ),
             ),
           ),
+
+          // -------------------- MAIN CONTENT --------------------
           SafeArea(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const SizedBox(height: 32),
+
+                // Header area: mini logo + screen title and tagline.
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 28),
                   child: Column(
@@ -156,7 +212,10 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                     ],
                   ),
                 ),
+
                 const Spacer(),
+
+                // Glass-like signup card docked to the bottom.
                 _SignupCard(
                   usernameCtl: _usernameCtl,
                   emailCtl: _emailCtl,
@@ -183,7 +242,7 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
 }
 
 /* ------------------------------- CARD ---------------------------------- */
-
+// Bottom glass card containing form fields, inline validation, and primary CTA.
 class _SignupCard extends StatelessWidget {
   final TextEditingController usernameCtl;
   final TextEditingController emailCtl;
@@ -219,8 +278,10 @@ class _SignupCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Useful flags for strength meter UI.
     final hasPwdInput = pwd1Ctl.text.isNotEmpty;
 
+    // Strength metrics derived from helpers below.
     final strengthValue = _strengthValue(pwd1Ctl.text);
     final strengthLabel = _strengthLabel(pwd1Ctl.text);
     final strengthColor = _strengthColor(strengthLabel);
@@ -228,6 +289,7 @@ class _SignupCard extends StatelessWidget {
     return ClipRRect(
       borderRadius: const BorderRadius.vertical(top: Radius.circular(34)),
       child: BackdropFilter(
+        // Frosted-glass look.
         filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
         child: Container(
           width: double.infinity,
@@ -249,12 +311,15 @@ class _SignupCard extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                // Username
                 _Field(
                   label: 'Username',
                   controller: usernameCtl,
                   hintText: 'your_username',
                 ),
                 const SizedBox(height: 18),
+
+                // Email
                 _Field(
                   label: 'Email',
                   controller: emailCtl,
@@ -262,6 +327,8 @@ class _SignupCard extends StatelessWidget {
                   hintText: 'you@example.com',
                 ),
                 const SizedBox(height: 18),
+
+                // Password
                 _Field(
                   label: 'Password',
                   controller: pwd1Ctl,
@@ -278,7 +345,8 @@ class _SignupCard extends StatelessWidget {
                     onPressed: toggle1,
                   ),
                 ),
-                // Strength indicator
+
+                // Password strength indicator (appears when typing).
                 AnimatedSwitcher(
                   duration: const Duration(milliseconds: 240),
                   child: hasPwdInput
@@ -319,6 +387,8 @@ class _SignupCard extends StatelessWidget {
                       : const SizedBox(height: 4),
                 ),
                 const SizedBox(height: 18),
+
+                // Confirm Password
                 _Field(
                   label: 'Confirm Password',
                   controller: pwd2Ctl,
@@ -335,6 +405,8 @@ class _SignupCard extends StatelessWidget {
                     onPressed: toggle2,
                   ),
                 ),
+
+                // Passwords match / mismatch feedback.
                 if (pwd2Ctl.text.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
@@ -365,6 +437,8 @@ class _SignupCard extends StatelessWidget {
                       ],
                     ),
                   ),
+
+                // Inline error banner (from backend validation), if any.
                 if (authError != null) ...[
                   const SizedBox(height: 18),
                   _InlineBanner(
@@ -373,14 +447,20 @@ class _SignupCard extends StatelessWidget {
                     text: authError!,
                   ),
                 ],
+
                 const SizedBox(height: 26),
+
+                // Primary CTA
                 _PrimaryGradientButton(
                   enabled: canSubmit,
                   isLoading: isLoading,
                   onPressed: canSubmit ? onSubmit : null,
                   label: 'Sign Up',
                 ),
+
                 const SizedBox(height: 22),
+
+                // Link to Login
                 GestureDetector(
                   onTap: onLoginTap,
                   child: RichText(
@@ -412,7 +492,8 @@ class _SignupCard extends StatelessWidget {
     );
   }
 
-  // Helpers for strength
+  // -------------------- STRENGTH HELPERS --------------------
+  // Returns a normalized 0..1 value based on basic rules.
   static double _strengthValue(String p) {
     if (p.isEmpty) return 0;
     int s = 0;
@@ -423,6 +504,7 @@ class _SignupCard extends StatelessWidget {
     return (s / 4).clamp(0, 1).toDouble();
   }
 
+  // Returns a friendly label for the strength meter.
   static String _strengthLabel(String p) {
     if (p.isEmpty) return '';
     int s = 0;
@@ -443,6 +525,7 @@ class _SignupCard extends StatelessWidget {
     }
   }
 
+  // Color mapping for strength labels.
   static Color _strengthColor(String label) {
     switch (label) {
       case 'Weak':
@@ -461,6 +544,7 @@ class _SignupCard extends StatelessWidget {
 
 /* ----------------------------- COMPONENTS ------------------------------ */
 
+// Single labeled text field with glassy styling and optional suffix icon.
 class _Field extends StatefulWidget {
   final String label;
   final TextEditingController controller;
@@ -520,6 +604,7 @@ class _FieldState extends State<_Field> {
               borderSide: BorderSide(color: Color(0xFF3B82F6), width: 1.4),
             ),
           ),
+          // Triggers setState in parent field to refresh validation/strength UI.
           onChanged: (_) => setState(() {}),
         ),
       ],
@@ -527,6 +612,7 @@ class _FieldState extends State<_Field> {
   }
 }
 
+// Primary gradient button with loading spinner and subtle shadow.
 class _PrimaryGradientButton extends StatelessWidget {
   final bool enabled;
   final bool isLoading;
@@ -607,6 +693,7 @@ class _PrimaryGradientButton extends StatelessWidget {
   }
 }
 
+// Inline alert/banner used for error display beneath fields.
 class _InlineBanner extends StatelessWidget {
   final Color color;
   final IconData icon;
@@ -647,6 +734,7 @@ class _InlineBanner extends StatelessWidget {
   }
 }
 
+// Compact brand mark used in the header above the form.
 class _AppMiniLogo extends StatelessWidget {
   const _AppMiniLogo();
 
@@ -654,6 +742,7 @@ class _AppMiniLogo extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
+        // Circular gradient badge with app icon.
         Container(
           height: 42,
           width: 42,
@@ -683,6 +772,7 @@ class _AppMiniLogo extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 12),
+        // Wordmark
         Text(
           'WebGIS 3D',
           style: Theme.of(context).textTheme.titleLarge?.copyWith(

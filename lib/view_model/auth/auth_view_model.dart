@@ -1,14 +1,29 @@
+// =============================================================
+// AUTH VIEWMODEL (Riverpod StateNotifier)
+// Central orchestrator for authentication flows and session state.
+// Exposes AuthState to the UI and delegates API calls to repositories.
+//
+// Responsibilities:
+// - login / register
+// - tryRestoreSession (from persisted token)
+// - logout (remote best-effort + local cleanup)
+// - keep Profile state in sync via profileNotifierProvider
+//
+// Notes:
+// - UI should read:   ref.watch(authViewModelProvider)
+// - UI should call:   ref.read(authViewModelProvider.notifier).login(...)
+// - Error strings are mapped to user-friendly messages via _mapError.
+// =============================================================
+
 import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../../core/errors/app_exceptions.dart';
 import '../../core/storage/auth_storage.dart';
 import '../../models/profile_model.dart';
 import '../../repository/auth_repository.dart';
 import '../../repository/profile_repository.dart';
 import '../../settings/providers/global_provider.dart';
 import '../states/auth_state.dart';
-
 
 class AuthViewModel extends StateNotifier<AuthState> {
   final AuthRepository _authRepo;
@@ -18,16 +33,27 @@ class AuthViewModel extends StateNotifier<AuthState> {
   AuthViewModel(this._authRepo, this._profileRepo, this._ref)
       : super(AuthState.initial());
 
-  Future<void> login({required String email, required String password}) async {
+  // -------------------------------------------------------------
+  // LOGIN
+  // -------------------------------------------------------------
+  Future<void> login({
+    required String email,
+    required String password,
+  }) async {
     if (email.isEmpty || password.isEmpty) {
       _emitError('Email and password required.');
       return;
     }
+    if (state.isSubmitting) return; // prevent duplicate submissions
+
     state = state.copyWith(flow: AuthFlow.loading, isSubmitting: true, error: null);
     try {
       final token = await _authRepo.login(email: email, password: password);
       final profile = await _profileRepo.fetchProfile();
+
+      // Broadcast profile to interested listeners.
       _ref.read(profileNotifierProvider.notifier).setProfile(profile);
+
       state = state.copyWith(
         flow: AuthFlow.authenticated,
         token: token,
@@ -39,6 +65,9 @@ class AuthViewModel extends StateNotifier<AuthState> {
     }
   }
 
+  // -------------------------------------------------------------
+  // REGISTER
+  // -------------------------------------------------------------
   Future<void> register({
     required String username,
     required String email,
@@ -53,6 +82,8 @@ class AuthViewModel extends StateNotifier<AuthState> {
       _emitError('Passwords do not match.');
       return;
     }
+    if (state.isSubmitting) return;
+
     state = state.copyWith(flow: AuthFlow.loading, isSubmitting: true, error: null);
     try {
       final msg = await _authRepo.register(
@@ -71,16 +102,22 @@ class AuthViewModel extends StateNotifier<AuthState> {
     }
   }
 
+  // -------------------------------------------------------------
+  // TRY RESTORE SESSION
+  // -------------------------------------------------------------
   Future<void> tryRestoreSession() async {
     final token = await AuthToken.getToken();
     if (token == null) {
       state = AuthState.initial();
       return;
     }
+
     state = state.copyWith(flow: AuthFlow.loading, isSubmitting: true);
     try {
       final profile = await _profileRepo.fetchProfile();
+
       _ref.read(profileNotifierProvider.notifier).setProfile(profile);
+
       state = state.copyWith(
         flow: AuthFlow.authenticated,
         token: token,
@@ -88,40 +125,50 @@ class AuthViewModel extends StateNotifier<AuthState> {
         isSubmitting: false,
       );
     } catch (_) {
+      // If profile fetch fails, ensure full local logout/reset.
       await _authRepo.logout();
       state = AuthState.initial();
     }
   }
 
-  // Remote + local logout sequence
+  // -------------------------------------------------------------
+  // LOGOUT (remote best-effort + local cleanup)
+  // -------------------------------------------------------------
   Future<void> logout() async {
-    // Show a small spinner (UI can listen to isLoggingOut)
+    if (state.isLoggingOut) return;
+
     state = state.copyWith(isLoggingOut: true, error: null);
 
-    String serverMessage = '';
     try {
-      // Attempt remote logout (ignore result if it fails)
-      serverMessage = await _authRepo.logoutRemote();
+      // Attempt remote logout; ignore common "already invalid" errors.
+      await _authRepo.logoutRemote();
     } catch (e) {
-      // Acceptable failures:
-      // - 401 Invalid token (already invalid on server)
-      // - Network offline
+      // Acceptable failures: 401/Unauthorized or offline
       final msg = e.toString();
-      if (!msg.contains('401') && !msg.contains('Unauthorized')) {
-        // If you want to surface the error, set error field (optional)
+      final ignorable = msg.contains('401') || msg.contains('Unauthorized');
+      if (!ignorable) {
+        // Optionally surface non-ignorable errors by setting state.error.
         // state = state.copyWith(error: 'Logout server error (ignored)');
       }
     } finally {
-      // Always clear local state
+      // Always clear local state and broadcast profile clear.
       await _authRepo.logout();
       _ref.read(profileNotifierProvider.notifier).clear();
       state = AuthState.initial();
     }
-
-    // (Optional) If you want to keep a last server message, you could store it in
-    // a separate provider or show a SnackBar from the UI after ref.listen detects state reset.
   }
 
+  // -------------------------------------------------------------
+  // External profile update (e.g., after editing profile elsewhere)
+  // -------------------------------------------------------------
+  void setProfileFromOutside(ProfileModel profile) {
+    if (!state.isLoggedIn) return;
+    state = state.copyWith(profile: profile);
+  }
+
+  // -------------------------------------------------------------
+  // Helpers
+  // -------------------------------------------------------------
   void _emitError(String message) {
     state = state.copyWith(
       flow: AuthFlow.error,
@@ -130,13 +177,11 @@ class AuthViewModel extends StateNotifier<AuthState> {
       isLoggingOut: false,
     );
   }
-// Add this method inside AuthViewModel (after existing ones).
-  void setProfileFromOutside(ProfileModel profile) {
-    if (!state.isLoggedIn) return;
-    state = state.copyWith(profile: profile);
-  }
+
   String _mapError(Object e) {
     final raw = e.toString();
+
+    // Try to extract JSON error object enclosed in braces.
     final start = raw.indexOf('{');
     final end = raw.lastIndexOf('}');
     if (start != -1 && end != -1 && end > start) {
@@ -148,8 +193,11 @@ class AuthViewModel extends StateNotifier<AuthState> {
           if (val is List && val.isNotEmpty) return val.first.toString();
           if (val is String) return val;
         }
-      } catch (_) {}
+      } catch (_) {
+        // ignore JSON parse issues and fall through
+      }
     }
+
     if (raw.contains('Unauthorized')) return 'Invalid credentials.';
     return raw.replaceAll('Exception: ', '');
   }

@@ -1,3 +1,34 @@
+// =============================================================
+// PASSWORD CHANGE SCREEN
+// Screen for updating the user's password with live strength
+// feedback and match validation. Visual style matches Settings.
+// =============================================================
+//
+// FLOW OVERVIEW
+// - User types a new password twice.
+// - Live: strength meter updates based on simple rules.
+// - Live: "passwords match" feedback under confirm field.
+// - Submit calls passwordChangeViewModelProvider.notifier.changePassword.
+// - Shows success/error messages and returns on success.
+//
+// INTEGRATION
+// - Riverpod provider: passwordChangeViewModelProvider.
+//
+// UI LAYERS
+// - Background image
+// - Dark gradient overlay
+// - SafeArea with a custom iOS-like back button
+// - Centered glassy card containing fields and CTA
+//
+// SAFETY
+// - Text controllers disposed in dispose().
+// - mounted checks before navigation/snackbars.
+//
+// TWEAKS
+// - Adjust gradients/opacities to fit branding.
+// - Swap ElevatedButton style/label as needed.
+// =============================================================
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -17,18 +48,29 @@ class PasswordChangeScreen extends ConsumerStatefulWidget {
 }
 
 class _PasswordChangeScreenState extends ConsumerState<PasswordChangeScreen> {
+  // -------------------- CONTROLLERS + TOGGLES --------------------
+  // Hold inputs for new password and confirmation.
   final _new1Ctl = TextEditingController();
   final _new2Ctl = TextEditingController();
+  // Toggles for showing/hiding password fields.
   bool _obscure1 = true;
   bool _obscure2 = true;
 
   @override
   void dispose() {
+    // Prevent leaks by disposing controllers.
     _new1Ctl.dispose();
     _new2Ctl.dispose();
     super.dispose();
   }
 
+  // =============================================================
+  // SUBMIT: Attempt to change password via ViewModel
+  // - Unfocus keyboard
+  // - Call changePassword(...)
+  // - Show success/error via SnackBar
+  // - Pop back shortly on success
+  // =============================================================
   Future<void> _submit() async {
     FocusScope.of(context).unfocus();
     await ref.read(passwordChangeViewModelProvider.notifier).changePassword(
@@ -56,7 +98,10 @@ class _PasswordChangeScreenState extends ConsumerState<PasswordChangeScreen> {
     }
   }
 
-  // --- Visual-only password strength helpers ---
+  // =============================================================
+  // VISUAL-ONLY PASSWORD STRENGTH HELPERS
+  // Simple heuristics for user feedback (not server-side rules).
+  // =============================================================
   String _strengthLabel(String p) {
     if (p.isEmpty) return '';
     int s = 0;
@@ -104,31 +149,38 @@ class _PasswordChangeScreenState extends ConsumerState<PasswordChangeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // -------------------- STATE + DERIVED FLAGS --------------------
     final state = ref.watch(passwordChangeViewModelProvider);
+
     final pwd = _new1Ctl.text;
     final confirm = _new2Ctl.text;
+
+    // Match/mismatch feedback toggles.
     final match = pwd.isNotEmpty && confirm.isNotEmpty && pwd == confirm;
     final mismatch = confirm.isNotEmpty && pwd != confirm;
 
+    // Strength values for the progress bar + label.
     final strengthLabel = _strengthLabel(pwd);
     final strengthVal = _strengthValue(pwd);
     final strengthColor = _strengthColor(strengthLabel);
 
+    // Button enabled when both inputs exist and not submitting.
     final canSubmit = pwd.isNotEmpty && confirm.isNotEmpty && !state.submitting;
 
+    // -------------------- LAYOUT --------------------
     return Stack(
       children: [
         Scaffold(
           body: Stack(
             children: [
-              // Background image
+              // LAYER 1: Background image
               Positioned.fill(
                 child: Image.asset(
                   'lib/assets/images/login_image.png',
                   fit: BoxFit.cover,
                 ),
               ),
-              // Dark gradient overlay
+              // LAYER 2: Dark gradient overlay
               Positioned.fill(
                 child: Container(
                   decoration: BoxDecoration(
@@ -143,6 +195,7 @@ class _PasswordChangeScreenState extends ConsumerState<PasswordChangeScreen> {
                   ),
                 ),
               ),
+              // LAYER 3: Content with SafeArea
               SafeArea(
                 child: Column(
                   children: [
@@ -159,6 +212,7 @@ class _PasswordChangeScreenState extends ConsumerState<PasswordChangeScreen> {
                       ),
                     ),
                     const SizedBox(height: 8),
+                    // Main card centered with scroll for small screens
                     Expanded(
                       child: Center(
                         child: SingleChildScrollView(
@@ -210,7 +264,7 @@ class _PasswordChangeScreenState extends ConsumerState<PasswordChangeScreen> {
                                 ),
                                 const SizedBox(height: 24),
 
-                                // Messages
+                                // Inline success/error messages (if any)
                                 if (state.error != null)
                                   _InlineMessage(
                                     text: state.error!,
@@ -227,6 +281,7 @@ class _PasswordChangeScreenState extends ConsumerState<PasswordChangeScreen> {
                                     state.successMessage != null)
                                   const SizedBox(height: 20),
 
+                                // New password field
                                 _PasswordField(
                                   label: 'New Password',
                                   controller: _new1Ctl,
@@ -235,7 +290,8 @@ class _PasswordChangeScreenState extends ConsumerState<PasswordChangeScreen> {
                                       setState(() => _obscure1 = !_obscure1),
                                   onChanged: (_) => setState(() {}),
                                 ),
-                                // Strength
+
+                                // Strength meter + label
                                 if (pwd.isNotEmpty) ...[
                                   const SizedBox(height: 12),
                                   ClipRRect(
@@ -269,6 +325,8 @@ class _PasswordChangeScreenState extends ConsumerState<PasswordChangeScreen> {
                                 ],
 
                                 const SizedBox(height: 24),
+
+                                // Confirm password field
                                 _PasswordField(
                                   label: 'Confirm New Password',
                                   controller: _new2Ctl,
@@ -277,6 +335,8 @@ class _PasswordChangeScreenState extends ConsumerState<PasswordChangeScreen> {
                                       setState(() => _obscure2 = !_obscure2),
                                   onChanged: (_) => setState(() {}),
                                 ),
+
+                                // Match/mismatch feedback under confirm field
                                 if (match || mismatch) ...[
                                   const SizedBox(height: 10),
                                   Row(
@@ -308,6 +368,8 @@ class _PasswordChangeScreenState extends ConsumerState<PasswordChangeScreen> {
                                 ],
 
                                 const SizedBox(height: 30),
+
+                                // Submit button (shows spinner when submitting)
                                 SizedBox(
                                   width: double.infinity,
                                   child: ElevatedButton.icon(
@@ -349,7 +411,10 @@ class _PasswordChangeScreenState extends ConsumerState<PasswordChangeScreen> {
                                     ),
                                   ),
                                 ),
+
                                 const SizedBox(height: 14),
+
+                                // Helper text for stronger passwords
                                 const Text(
                                   'Must be at least 8 characters. Use uppercase, numbers and symbols for better security.',
                                   style: TextStyle(
@@ -377,6 +442,10 @@ class _PasswordChangeScreenState extends ConsumerState<PasswordChangeScreen> {
 
 /* ---------------------------- Helper Widgets ---------------------------- */
 
+// =============================================================
+// Cupertino-like "Back" button for the top-left corner.
+// Uses InkWell for ripple and a subtle glass background.
+// =============================================================
 class _CupertinoBackButton extends StatelessWidget {
   final VoidCallback? onTap;
   final String label;
@@ -419,6 +488,9 @@ class _CupertinoBackButton extends StatelessWidget {
   }
 }
 
+// =============================================================
+// Inline message banner for success/error notes inside the card.
+// =============================================================
 class _InlineMessage extends StatelessWidget {
   final String text;
   final Color color;
@@ -458,6 +530,10 @@ class _InlineMessage extends StatelessWidget {
   }
 }
 
+// =============================================================
+// Password field used for both "new" and "confirm" inputs.
+// Includes visibility toggle and consistent glass styling.
+// =============================================================
 class _PasswordField extends StatelessWidget {
   final String label;
   final TextEditingController controller;

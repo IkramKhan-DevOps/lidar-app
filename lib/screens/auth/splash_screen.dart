@@ -1,3 +1,29 @@
+// =============================================================
+// SPLASH SCREEN
+// Branded intro that restores session and navigates to the proper
+// screen after a minimum display time.
+// Tech stack: Flutter + Riverpod (authViewModelProvider)
+// =============================================================
+//
+// FLOW OVERVIEW
+// 1) initState:
+//    - Set up intro animation (logo scales, content fades in).
+//    - Start session restore (async) AND a minimum visible delay in parallel.
+// 2) After both complete, route once:
+//    - If a valid session exists -> Home.
+//    - Otherwise -> Login.
+// 3) Clean up animation controller in dispose.
+//
+// CUSTOMIZE QUICKLY
+// - _minDisplay: control minimum splash visibility.
+// - _backgroundGradient: adjust background colors.
+// - Logo/branding: update colors, icon, shadows.
+//
+// SAFETY GUARDS
+// - _navigated prevents double navigation.
+// - mounted checks ensure no navigation after widget disposal.
+// =============================================================
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:platform_channel_swift_demo/core/configs/app_routes.dart';
@@ -13,22 +39,40 @@ class SplashScreen extends ConsumerStatefulWidget {
 
 class _SplashScreenState extends ConsumerState<SplashScreen>
     with SingleTickerProviderStateMixin {
+  // --------------- ANIMATION ---------------
+  // Drives both scale and fade animations.
   AnimationController? _controller;
+
+  // Scales the circular logo from ~70% to ~100%.
   Animation<double>? _logoScale;
+
+  // Fades in the title/subtitle and progress indicator.
   Animation<double>? _fadeIn;
+
+  // --------------- NAVIGATION GUARD ---------------
+  // Ensures navigation happens only once.
   bool _navigated = false;
 
-  static const Duration _minDisplay = Duration(seconds: 2 );
+  // --------------- TIMING ---------------
+  // Minimum time the splash stays on screen (prevents instant flicker).
+  static const Duration _minDisplay = Duration(seconds: 2);
 
   @override
   void initState() {
     super.initState();
-    _setupAnimation();
-    _startFlow();
+    _setupAnimation(); // Prepare and start the intro animation.
+    _startFlow();      // Start auth restore + minimum delay in parallel.
   }
 
+  // =============================================================
+  // SETUP: Animation Controller + Curves
+  // - Scale uses easeOutBack for a subtle "pop".
+  // - Fade uses easeOut for a smooth content reveal.
+  // =============================================================
   void _setupAnimation() {
+    // Prevents re-initialization during hot reload.
     if (_controller != null) return;
+
     final ctrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1200),
@@ -39,24 +83,38 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
       parent: ctrl,
       curve: const Interval(0.0, 0.55, curve: Curves.easeOutBack),
     );
+
     _fadeIn = CurvedAnimation(
       parent: ctrl,
       curve: const Interval(0.35, 1.0, curve: Curves.easeOut),
     );
+
+    // Start the animation immediately.
     ctrl.forward();
   }
 
+  // =============================================================
+  // BOOTSTRAP: Restore Session + Enforce Minimum Display Time
+  // - Waits for BOTH to complete (using Future.wait).
+  // - Routes once based on auth state.
+  // =============================================================
   Future<void> _startFlow() async {
+    // Attempt to restore a previous authenticated session.
     final restoreFuture =
     ref.read(authViewModelProvider.notifier).tryRestoreSession();
+
+    // Enforce the minimum splash visibility.
     final delayFuture = Future.delayed(_minDisplay);
 
-    // Wait for BOTH auth restore and minimum splash duration
+    // Wait for both operations to finish.
     await Future.wait([restoreFuture, delayFuture]);
 
+    // Abort if widget is gone or we've already navigated.
     if (!mounted || _navigated) return;
+
     final auth = ref.read(authViewModelProvider);
 
+    // Route exactly once.
     _navigated = true;
     if (auth.isLoggedIn) {
       Navigator.pushReplacementNamed(context, AppRoutes.homeScreen);
@@ -67,10 +125,15 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
 
   @override
   void dispose() {
+    // Always dispose animation controller to prevent leaks.
     _controller?.dispose();
     super.dispose();
   }
 
+  // =============================================================
+  // THEME: Background Gradient
+  // Adjust these colors to update the splash mood/theme.
+  // =============================================================
   LinearGradient get _backgroundGradient => const LinearGradient(
     colors: [
       Color(0xFF0F172A),
@@ -84,12 +147,18 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+
+    // Locals for readability and safe null checks.
     final controller = _controller;
     final fade = _fadeIn;
     final scale = _logoScale;
 
+    // =============================================================
+    // CONTENT: Either fallback loader (very early build) or animation.
+    // =============================================================
     Widget animatedContent;
     if (controller == null || fade == null || scale == null) {
+      // Early fallback: shows if the controller hasn't initialized yet.
       animatedContent = Column(
         mainAxisSize: MainAxisSize.min,
         children: const [
@@ -106,6 +175,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
         ],
       );
     } else {
+      // Main animated sequence.
       animatedContent = AnimatedBuilder(
         animation: controller,
         builder: (context, _) {
@@ -114,7 +184,9 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                // ---------- Brand Badge (Circular Gradient + Icon) ----------
                 Transform.scale(
+                  // Scale from 0.7 to 1.0 over the first half of the timeline.
                   scale: 0.7 + (scale.value * 0.3),
                   child: Container(
                     height: 110,
@@ -149,6 +221,8 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
                   ),
                 ),
                 const SizedBox(height: 28),
+
+                // ---------- Title ----------
                 Text(
                   'WebGIS 3D',
                   style: theme.textTheme.headlineSmall?.copyWith(
@@ -157,7 +231,10 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
                     color: Colors.white,
                   ),
                 ),
+
                 const SizedBox(height: 10),
+
+                // ---------- Tagline ----------
                 Opacity(
                   opacity: 0.85,
                   child: Text(
@@ -170,7 +247,10 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
                     ),
                   ),
                 ),
+
                 const SizedBox(height: 36),
+
+                // ---------- Progress Row ----------
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: const [
@@ -201,17 +281,25 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
       );
     }
 
+    // =============================================================
+    // SCAFFOLD: Gradient background + subtle radial glow + footer info.
+    // =============================================================
     return Scaffold(
       body: DecoratedBox(
         decoration: BoxDecoration(gradient: _backgroundGradient),
         child: Stack(
           children: [
+            // Soft radial glow painted once for depth.
             Positioned.fill(
               child: IgnorePointer(
                 child: CustomPaint(painter: _RadialGlowPainter()),
               ),
             ),
+
+            // Center the animated content.
             Center(child: animatedContent),
+
+            // Footer: version + copyright.
             Positioned(
               bottom: 28,
               left: 0,
@@ -221,7 +309,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
                 child: Column(
                   children: [
                     Text(
-                      'v1.0.0',
+                      'v1.0.0', // Tip: wire this to pubspec/build config for accuracy.
                       style: theme.textTheme.labelSmall?.copyWith(
                         color: Colors.white60,
                         letterSpacing: 1.1,
@@ -248,11 +336,16 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
   }
 }
 
+// =============================================================
+// PAINTER: Subtle radial background glow for added depth.
+// - Stateless and does not repaint (performance-friendly).
+// =============================================================
 class _RadialGlowPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final center = size.center(Offset.zero);
     final radius = size.shortestSide * 0.55;
+
     final gradient = RadialGradient(
       colors: [
         const Color(0xFF1E3A8A).withOpacity(0.18),
@@ -261,8 +354,10 @@ class _RadialGlowPainter extends CustomPainter {
       ],
       stops: const [0.0, 0.45, 1.0],
     );
+
     final paint =
     Paint()..shader = gradient.createShader(Rect.fromCircle(center: center, radius: radius));
+
     canvas.drawCircle(center, radius, paint);
   }
 

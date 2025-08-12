@@ -5,6 +5,7 @@ import ARKit
 import QuickLook
 import UniformTypeIdentifiers
 import GoogleMaps
+import Network
 
 @available(iOS 13.4, *)
 @main
@@ -14,6 +15,9 @@ import GoogleMaps
     private var openFolderResult: FlutterResult?
     private var modelVC: ModelViewController?
     private var scanCache: [(url: URL, metadata: ScanMetadata?)]?
+    private let networkMonitor = NWPathMonitor()
+    private var isOnline = false
+    private let apiBaseURL = "http://192.168.1.28:8000/api/v1" // Assume API base, update as needed
 
     override func application(
         _ application: UIApplication,
@@ -97,9 +101,89 @@ import GoogleMaps
             }
         }
 
+        setupNetworkMonitor()
+
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
 
+
+
+    private func setupNetworkMonitor() {
+            networkMonitor.pathUpdateHandler = { path in
+                let wasOffline = !self.isOnline
+                self.isOnline = path.status == .satisfied
+                if self.isOnline && wasOffline {
+                    self.syncLocalToServer { success in
+                        if success {
+                            os_log("Offline scans synced to server", log: OSLog.default, type: .info)
+                        } else {
+                            os_log("Failed to sync offline scans", log: OSLog.default, type: .error)
+                        }
+                    }
+                }
+            }
+            let queue = DispatchQueue(label: "AppDelegateNetworkMonitor")
+            networkMonitor.start(queue: queue)
+        }
+
+       private func syncLocalToServer(completion: @escaping (Bool) -> Void) {
+               let localScans = ScanLocalStorage.shared.getAllScans()
+               var syncSuccess = true
+               let group = DispatchGroup()
+
+               for local in localScans {
+                   if let localMeta = local.metadata, localMeta.status == "pending" || localMeta.status == "failed" {
+                       group.enter()
+                       self.uploadScan(folderURL: local.url) { success in
+                           if success {
+                               do {
+                                   try FileManager.default.removeItem(at: local.url)
+                                   os_log("Deleted local scan after successful upload: %@", log: OSLog.default, type: .info, local.url.path)
+                               } catch {
+                                   os_log("Failed to delete local scan: %@", log: OSLog.default, type: .error, error.localizedDescription)
+                                   syncSuccess = false
+                               }
+                           } else {
+                               syncSuccess = false
+                           }
+                           group.leave()
+                       }
+                   }
+               }
+
+               group.notify(queue: .main) {
+                   self.invalidateScanCache()
+                   completion(syncSuccess)
+               }
+           }
+
+           private func fetchAPIScans(completion: @escaping ([ScanMetadata]?) -> Void) {
+                   let url = URL(string: "\(apiBaseURL)/scans/")!
+                   //print fetchapi
+
+                     os_log("Fetching API scans from: %@", log: OSLog.default, type: .info, url.absoluteString)
+                   let task = URLSession.shared.dataTask(with: url) { data, response, error in
+                       if let error = error {
+                           os_log("Failed to fetch API scans: %@", log: OSLog.default, type: .error, error.localizedDescription)
+                           completion(nil)
+                           return
+                       }
+                       guard let data = data, let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                           completion(nil)
+                           return
+                       }
+                       do {
+                           let decoder = JSONDecoder()
+                           decoder.dateDecodingStrategy = .iso8601
+                           let scans = try decoder.decode([ScanMetadata].self, from: data)
+                           completion(scans)
+                       } catch {
+                           os_log("Failed to parse API scans: %@", log: OSLog.default, type: .error, error.localizedDescription)
+                           completion(nil)
+                       }
+                   }
+                   task.resume()
+               }
     private func downloadZipFile(call: FlutterMethodCall, result: @escaping FlutterResult) {
         guard let args = call.arguments as? [String: Any],
               let folderPath = args["folderPath"] as? String else {
@@ -347,35 +431,113 @@ import GoogleMaps
         }
     }
 
-    private func getSavedScans(result: @escaping FlutterResult) {
-        let scans = ScanLocalStorage.shared.getAllScans()
-        scanCache = scans // Update cache with latest scans
-        let dateFormatter = ISO8601DateFormatter()
-        let scansData: [[String: Any]] = scans.compactMap { scan in
-            guard let metadata = scan.metadata else { return nil }
-            let validCoordinates = metadata.coordinates?.filter { coord in
-                guard coord.count == 2 else { return false }
-                let lat = coord[0], lon = coord[1]
-                return lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180
-            } ?? []
-            return [
-                "scanID": metadata.scanID,
-                "name": metadata.name,
-                "folderPath": scan.url.path,
-                "hasUSDZ": ScanLocalStorage.shared.hasUSDZModel(in: scan.url),
-                "usdzPath": scan.url.appendingPathComponent("model.usdz").path,
-                "timestamp": dateFormatter.string(from: metadata.timestamp),
-                "coordinates": validCoordinates,
-                "coordinateTimestamps": metadata.coordinateTimestamps ?? [],
-                "locationName": metadata.locationName ?? "",
-                "modelSizeBytes": metadata.modelSizeBytes ?? 0,
-                "imageCount": metadata.imageCount,
-                "status": metadata.status,
-                "snapshotPath": metadata.snapshotPath ?? ""
-            ]
+    private func uploadScan(folderURL: URL, completion: @escaping (Bool) -> Void) {
+            guard let metadataData = try? Data(contentsOf: folderURL.appendingPathComponent("metadata.json")),
+                  let zipData = try? Data(contentsOf: folderURL.appendingPathComponent("input_data.zip")) else {
+                completion(false)
+                return
+            }
+
+            let url = URL(string: "\(apiBaseURL)/scans")!
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+
+            let boundary = "Boundary-\(UUID().uuidString)"
+            request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+
+            var body = Data()
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"metadata\"\r\n\r\n".data(using: .utf8)!)
+            body.append(metadataData)
+            body.append("\r\n".data(using: .utf8)!)
+
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"zip\"; filename=\"input_data.zip\"\r\n".data(using: .utf8)!)
+            body.append("Content-Type: application/zip\r\n\r\n".data(using: .utf8)!)
+            body.append(zipData)
+            body.append("\r\n".data(using: .utf8)!)
+
+            body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+            request.httpBody = body
+
+            let task = URLSession.shared.dataTask(with: request) { data, response, error in
+                if let error = error {
+                    os_log("Failed to upload scan: %@", log: OSLog.default, type: .error, error.localizedDescription)
+                    completion(false)
+                    return
+                }
+                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                    completion(true)
+                } else {
+                    completion(false)
+                }
+            }
+            task.resume()
         }
-        result(["scans": scansData])
-    }
+
+    private func getSavedScans(result: @escaping FlutterResult) {
+            if self.isOnline {
+                self.fetchAPIScans { apiScans in
+                    guard let apiScans = apiScans else {
+                        result(FlutterError(code: "FETCH_FAILED", message: "Failed to fetch scans from API", details: nil))
+                        return
+                    }
+                    let dateFormatter = ISO8601DateFormatter()
+                    let scansData: [[String: Any]] = apiScans.map { metadata in
+                        let validCoordinates = metadata.coordinates?.filter { coord in
+                            guard coord.count == 2 else { return false }
+                            let lat = coord[0], lon = coord[1]
+                            return lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180
+                        } ?? []
+                        return [
+                            "scanID": metadata.scanID,
+                            "name": metadata.name,
+                            "folderPath": "", // Empty since remote, or generate a temp path if needed
+                            "hasUSDZ": metadata.status == "uploaded", // Assume based on status
+                            "usdzPath": "", // Empty for remote
+                            "timestamp": dateFormatter.string(from: metadata.timestamp),
+                            "coordinates": validCoordinates,
+                            "coordinateTimestamps": metadata.coordinateTimestamps ?? [],
+                            "locationName": metadata.locationName ?? "",
+                            "modelSizeBytes": metadata.modelSizeBytes ?? 0,
+                            "imageCount": metadata.imageCount,
+                            "status": metadata.status,
+                            "snapshotPath": metadata.snapshotPath ?? ""
+                        ]
+                    }
+                    result(["scans": scansData])
+                }
+            } else {
+                let scans = ScanLocalStorage.shared.getAllScans()
+                self.scanCache = scans
+                let dateFormatter = ISO8601DateFormatter()
+                let scansData: [[String: Any]] = scans.compactMap { scan in
+                    guard let metadata = scan.metadata else { return nil }
+                    let validCoordinates = metadata.coordinates?.filter { coord in
+                        guard coord.count == 2 else { return false }
+                        let lat = coord[0], lon = coord[1]
+                        return lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180
+                    } ?? []
+                    return [
+                        "scanID": metadata.scanID,
+                        "name": metadata.name,
+                        "folderPath": scan.url.path,
+                        "hasUSDZ": ScanLocalStorage.shared.hasUSDZModel(in: scan.url),
+                        "usdzPath": scan.url.appendingPathComponent("model.usdz").path,
+                        "timestamp": dateFormatter.string(from: metadata.timestamp),
+                        "coordinates": validCoordinates,
+                        "coordinateTimestamps": metadata.coordinateTimestamps ?? [],
+                        "locationName": metadata.locationName ?? "",
+                        "modelSizeBytes": metadata.modelSizeBytes ?? 0,
+                        "imageCount": metadata.imageCount,
+                        "status": metadata.status,
+                        "snapshotPath": metadata.snapshotPath ?? ""
+                    ]
+                }
+                result(["scans": scansData])
+            }
+        }
 
     private func deleteScan(call: FlutterMethodCall, result: @escaping FlutterResult) {
         guard let args = call.arguments as? [String: Any],

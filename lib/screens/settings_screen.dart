@@ -4,22 +4,54 @@ import 'package:platform_channel_swift_demo/core/configs/app_routes.dart';
 
 import '../settings/providers/auth_provider.dart';
 
-/// Simplified polished Settings screen.
-/// - Keeps your original layout & structure
-/// - Light, subtle refinements (spacing, consistency, tap feedback, readability)
-/// - No heavy glass / gradients added
-/// - Business logic untouched
+// =============================================================
+// SETTINGS SCREEN (Polished UI)
+// Lightweight visual pass that keeps your original layout and
+// logic intact. Adds consistent spacing, subtle feedback, and
+// helpful comments.
+//
+// FLOW OVERVIEW
+// - Header with app branding
+// - User card (initials avatar, name, email, "Profile" chip)
+// - Navigation items:
+//     * My Profile -> AppRoutes.profileChangeScreen
+//     * History    -> AppRoutes.homeScreen (placeholder target)
+//     * Change Password -> AppRoutes.passwordChangeScreen
+// - Preferences section: Dark Mode (placeholder), Language row
+// - Session section with "Log out" button
+// - Shows full-screen dim overlay while logging out
+//
+// INTEGRATION
+// - authViewModelProvider for profile/auth state and logout()
+// - profileNotifierProvider for up-to-date profile details
+//
+// UI LAYERS
+// - Background image
+// - Vertical dark gradient overlay
+// - Centered translucent card with subtle border + shadow
+//
+// SAFETY
+// - Uses context.mounted before navigating post-logout
+//
+// TWEAKS
+// - Replace background asset, colors, and opacity to match branding
+// - Wire Dark Mode and Language rows to real settings when ready
+// =============================================================
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Observe auth + profile state
     final auth = ref.watch(authViewModelProvider);
     final profileState = ref.watch(profileNotifierProvider);
     final profile = profileState.profile ?? auth.profile;
 
+    // Derive display data from profile safely
     final displayName = (profile?.displayName ?? 'Guest User').trim();
     final email = profile?.email ?? 'unknown@email.com';
+
+    // Compute "initials" (first letters of up to two name parts)
     final initials = displayName.isNotEmpty
         ? displayName
         .split(RegExp(r'\s+'))
@@ -34,20 +66,20 @@ class SettingsScreen extends ConsumerWidget {
         Scaffold(
           body: Stack(
             children: [
-              // Background image
+              // -------------------- LAYER 1: BACKGROUND IMAGE --------------------
               Positioned.fill(
                 child: Image.asset(
                   'lib/assets/images/login_image.png',
                   fit: BoxFit.cover,
                 ),
               ),
-              // Dark overlay (slightly softened from 0.7 -> 0.65 top)
+              // -------------------- LAYER 2: DARK GRADIENT OVERLAY --------------------
               Positioned.fill(
                 child: Container(
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
                       colors: [
-                        Colors.black.withOpacity(0.65),
+                        Colors.black.withOpacity(0.65), // slightly softened
                         Colors.black.withOpacity(0.45),
                       ],
                       begin: Alignment.topCenter,
@@ -56,6 +88,7 @@ class SettingsScreen extends ConsumerWidget {
                   ),
                 ),
               ),
+              // -------------------- MAIN CONTENT --------------------
               SafeArea(
                 child: Center(
                   child: SingleChildScrollView(
@@ -80,7 +113,7 @@ class SettingsScreen extends ConsumerWidget {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          // Brand row
+                          // ---------- Brand row ----------
                           Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
@@ -103,7 +136,7 @@ class SettingsScreen extends ConsumerWidget {
                           ),
                           const SizedBox(height: 28),
 
-                          // User card
+                          // ---------- User card ----------
                           Container(
                             padding: const EdgeInsets.all(16),
                             decoration: BoxDecoration(
@@ -115,6 +148,7 @@ class SettingsScreen extends ConsumerWidget {
                             ),
                             child: Row(
                               children: [
+                                // Initials avatar
                                 CircleAvatar(
                                   radius: 26,
                                   backgroundColor: const Color(0xFF2296F3),
@@ -129,6 +163,7 @@ class SettingsScreen extends ConsumerWidget {
                                   ),
                                 ),
                                 const SizedBox(width: 14),
+                                // Name + email
                                 Expanded(
                                   child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -154,6 +189,7 @@ class SettingsScreen extends ConsumerWidget {
                                   ),
                                 ),
                                 const SizedBox(width: 8),
+                                // Simple "Profile" chip (non-interactive label)
                                 Container(
                                   padding: const EdgeInsets.symmetric(
                                       horizontal: 10, vertical: 6),
@@ -175,7 +211,7 @@ class SettingsScreen extends ConsumerWidget {
                           ),
                           const SizedBox(height: 28),
 
-                          // Items
+                          // ---------- Navigation items ----------
                           _SettingsItem(
                             icon: Icons.person_outline,
                             label: 'My Profile',
@@ -184,13 +220,13 @@ class SettingsScreen extends ConsumerWidget {
                               AppRoutes.profileChangeScreen,
                             ),
                           ),
-                           _SettingsItem(
+                          _SettingsItem(
                             icon: Icons.history,
                             label: 'History',
                             onTap: () => Navigator.pushNamed(
                               context,
-                              AppRoutes.homeScreen,
-                            ) ,
+                              AppRoutes.homeScreen, // Placeholder target
+                            ),
                           ),
                           _SettingsItem(
                             icon: Icons.lock_reset,
@@ -204,21 +240,23 @@ class SettingsScreen extends ConsumerWidget {
                           const SizedBox(height: 12),
                           _SectionDivider(label: 'Preferences'),
 
+                          // ---------- Preferences ----------
                           _ToggleSetting(
                             icon: Icons.brightness_6_outlined,
                             label: 'Dark Mode',
                             value: true,
                             onChanged: (val) {
-                              // placeholder
+                              // Placeholder: hook into theme provider when available
                             },
                           ),
+                          // Language row (display only)
                           Container(
                             margin: const EdgeInsets.symmetric(vertical: 4),
                             padding: const EdgeInsets.symmetric(
                                 vertical: 10, horizontal: 26),
                             child: Row(
                               children: const [
-                                Icon(Icons.language,size: 22,
+                                Icon(Icons.language, size: 22,
                                     color: Colors.lightBlueAccent),
                                 SizedBox(width: 16),
                                 Text(
@@ -241,18 +279,18 @@ class SettingsScreen extends ConsumerWidget {
                           ),
                           const SizedBox(height: 4),
 
-
                           const SizedBox(height: 18),
                           _SectionDivider(label: 'Session'),
                           const SizedBox(height: 12),
 
-                          // Logout (slightly emphasized)
+                          // ---------- Logout ----------
                           SizedBox(
                             width: double.infinity,
                             child: TextButton.icon(
                               onPressed: auth.isLoggingOut
                                   ? null
                                   : () async {
+                                // Trigger logout via ViewModel, then wipe nav stack
                                 await ref
                                     .read(authViewModelProvider.notifier)
                                     .logout();
@@ -302,7 +340,10 @@ class SettingsScreen extends ConsumerWidget {
                               ),
                             ),
                           ),
+
                           const SizedBox(height: 20),
+
+                          // ---------- Version footer ----------
                           const Text(
                             'App Version 1.0.0',
                             style: TextStyle(
@@ -320,8 +361,10 @@ class SettingsScreen extends ConsumerWidget {
             ],
           ),
         ),
+
+        // -------------------- LOGOUT OVERLAY --------------------
         if (auth.isLoggingOut)
-        // Simple full-screen dim overlay with spinner
+        // Simple full-screen dim overlay with spinner to indicate progress
           Positioned.fill(
             child: Container(
               color: Colors.black45,
@@ -337,6 +380,7 @@ class SettingsScreen extends ConsumerWidget {
 
 /* --------------------------- Helper Widgets --------------------------- */
 
+// Thin labeled divider between groups, using semi-transparent lines.
 class _SectionDivider extends StatelessWidget {
   final String label;
   const _SectionDivider({required this.label});
@@ -373,6 +417,7 @@ class _SectionDivider extends StatelessWidget {
   }
 }
 
+// Single settings row with icon, label, and chevron, with tactile Ink ripple.
 class _SettingsItem extends StatelessWidget {
   final IconData icon;
   final String label;
@@ -435,6 +480,7 @@ class _SettingsItem extends StatelessWidget {
   }
 }
 
+// Switch row with leading icon and label, styled to match other rows.
 class _ToggleSetting extends StatelessWidget {
   final IconData icon;
   final String label;

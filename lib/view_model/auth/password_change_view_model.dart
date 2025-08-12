@@ -1,3 +1,33 @@
+// =============================================================
+// PASSWORD CHANGE VIEWMODEL (Riverpod StateNotifier)
+// Central state manager for the "Change Password" flow.
+// Exposes: PasswordChangeState (submitting, successMessage, error).
+// UI should observe this ViewModel and render feedback accordingly.
+// =============================================================
+//
+// USAGE
+// - Read state in widgets:
+//     final state = ref.watch(passwordChangeViewModelProvider);
+// - Trigger actions:
+//     ref.read(passwordChangeViewModelProvider.notifier).changePassword(
+//       newPassword1: p1,
+//       newPassword2: p2,
+//     );
+// - Clear transient messages after showing a snackbar/toast:
+//     ref.read(passwordChangeViewModelProvider.notifier).clearMessages();
+//
+// LAYERS
+// - AuthRepository: injected data layer that executes the API call.
+// - PasswordChangeViewModel: orchestrates validation + repository call.
+// - PasswordChangeState: plain state model consumed by the UI.
+//
+// NOTES
+// - Keep SnackBar/Toast rendering in the UI layer; this ViewModel
+//   only manages state and orchestrates API calls.
+// - _extractFirstError(...) attempts to surface user-friendly errors
+//   from structured backend responses.
+// =============================================================
+
 import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../repository/auth_repository.dart';
@@ -8,6 +38,7 @@ class PasswordChangeViewModel extends StateNotifier<PasswordChangeState> {
   PasswordChangeViewModel(this._authRepository)
       : super(PasswordChangeState.initial());
 
+  // Perform password change with simple client-side validation.
   Future<void> changePassword({
     required String newPassword1,
     required String newPassword2,
@@ -43,14 +74,16 @@ class PasswordChangeViewModel extends StateNotifier<PasswordChangeState> {
     }
   }
 
+  // Clear transient messages (useful after showing a snackbar/banner).
   void clearMessages() {
     state = state.copyWith(error: null, successMessage: null);
   }
 
+  // Attempts to extract a readable error message from backend responses.
+  // Examples handled:
+  // - {new_password2: [This password is too short...]}
+  // - JSON-like substrings embedded in Exception strings.
   String _extractFirstError(String raw) {
-    // Attempt to parse maps like:
-    // {new_password2: [This password is too short...]}
-    // or JSON-like substrings.
     final start = raw.indexOf('{');
     final end = raw.lastIndexOf('}');
     if (start != -1 && end != -1 && end > start) {
@@ -65,7 +98,7 @@ class PasswordChangeViewModel extends StateNotifier<PasswordChangeState> {
           }
         }
       } catch (_) {
-        // If not JSON, best effort regex
+        // Fall through if not valid JSON
       }
     }
     // Generic fallback

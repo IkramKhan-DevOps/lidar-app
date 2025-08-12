@@ -7,12 +7,38 @@
 // - Consistent field styling + primary accent (light blue)
 // - Business logic / provider calls unchanged
 // =============================================================
+//
+// FLOW OVERVIEW
+// - On first frame, ViewModel.load() fetches the current profile.
+// - When data arrives, controllers are populated once (_syncControllers).
+// - User edits fields; "Save" is enabled only when form is dirty and idle.
+// - On save, ViewModel.save(...) is called; success shows local banner+snack,
+//   and resets the saved flag; errors show inline + snackbar.
+//
+// INTEGRATION
+// - profileEditViewModelProvider exposes ProfileEditState and actions
+//   (load, save, clearSavedFlag).
+//
+// UI LAYERS
+// - Fullscreen background image
+// - Vertical dark gradient overlay
+// - SafeArea with custom Cupertino-like back button
+// - Center card with inputs and a primary action button
+//
+// SAFETY
+// - Controllers disposed in dispose().
+// - mounted checks before UI feedback / state changes.
+//
+// TWEAKS
+// - Update colors/opacity to match brand.
+// - Add validation if needed before calling save(...).
+// =============================================================
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../settings/providers/auth_provider.dart';
-import '../view_model/states/rofile_edit_state.dart'; // (Keeping original import path / filename)
+import '../view_model/states/profile_edit_state.dart'; // (Keeping original import path / filename)
 
 class ProfileEditScreen extends ConsumerStatefulWidget {
   const ProfileEditScreen({super.key});
@@ -22,17 +48,23 @@ class ProfileEditScreen extends ConsumerStatefulWidget {
 }
 
 class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
+  // -------------------- TEXT CONTROLLERS --------------------
+  // Hold the user's editable profile fields.
   final _firstNameCtl = TextEditingController();
   final _lastNameCtl = TextEditingController();
   final _usernameCtl = TextEditingController();
 
+  // Ensures initial data is written to controllers only once.
   bool _loadedInitial = false;
+
+  // Controls display of a transient local success banner after saving.
   bool _showLocalSuccess = false;
 
   @override
   void initState() {
     super.initState();
-    // Trigger load after first frame
+    // Trigger load after first frame; keeps initState clean and avoids
+    // synchronous provider reads during build.
     Future.microtask(() {
       ref.read(profileEditViewModelProvider.notifier).load();
     });
@@ -40,12 +72,17 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
 
   @override
   void dispose() {
+    // Always dispose controllers to prevent memory leaks.
     _firstNameCtl.dispose();
     _lastNameCtl.dispose();
     _usernameCtl.dispose();
     super.dispose();
   }
 
+  // =============================================================
+  // Populate controllers when original profile data becomes available.
+  // Runs only once per screen lifecycle due to _loadedInitial guard.
+  // =============================================================
   void _syncControllers(ProfileEditState state) {
     if (_loadedInitial) return;
     if (state.original != null && !state.loading) {
@@ -53,10 +90,14 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
       _lastNameCtl.text = state.original?.lastName ?? '';
       _usernameCtl.text = state.original?.username ?? '';
       _loadedInitial = true;
-      setState(() {});
+      setState(() {}); // Refresh to update canSave, etc.
     }
   }
 
+  // =============================================================
+  // Check if any field differs from the originally loaded profile.
+  // Used to enable/disable the Save button.
+  // =============================================================
   bool _isDirty(ProfileEditState st) {
     final o = st.original;
     if (o == null) return false;
@@ -65,6 +106,12 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
         _usernameCtl.text.trim() != (o.username ?? '');
   }
 
+  // =============================================================
+  // Save handler:
+  // - Calls ViewModel.save(...) with trimmed inputs.
+  // - On success: show local success banner + snackbar, then hide banner.
+  // - On error: show snackbar with error message.
+  // =============================================================
   Future<void> _onSave() async {
     final notifier = ref.read(profileEditViewModelProvider.notifier);
     await notifier.save(
@@ -84,6 +131,7 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
         ),
       );
       notifier.clearSavedFlag();
+      // Hide local banner after a short delay.
       Future.delayed(const Duration(seconds: 2), () {
         if (mounted) setState(() => _showLocalSuccess = false);
       });
@@ -99,11 +147,17 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Observe state; will rebuild UI on changes (loading/saving/errors).
     final editState = ref.watch(profileEditViewModelProvider);
+
+    // Sync controllers once when data is loaded.
     _syncControllers(editState);
 
+    // Convenience locals
     final profile = editState.original;
     final email = profile?.email ?? '';
+
+    // Save button is enabled only when not loading/saving and form is dirty.
     final canSave = !editState.loading && !editState.saving && _isDirty(editState);
 
     return Stack(
@@ -111,14 +165,14 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
         Scaffold(
           body: Stack(
             children: [
-              // Background image (same as Settings / PasswordChange)
+              // -------------------- LAYER 1: BACKGROUND IMAGE --------------------
               Positioned.fill(
                 child: Image.asset(
                   'lib/assets/images/login_image.png',
                   fit: BoxFit.cover,
                 ),
               ),
-              // Dark overlay gradient
+              // -------------------- LAYER 2: DARK GRADIENT OVERLAY --------------------
               Positioned.fill(
                 child: Container(
                   decoration: BoxDecoration(
@@ -133,6 +187,7 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
                   ),
                 ),
               ),
+              // -------------------- MAIN CONTENT --------------------
               SafeArea(
                 child: Column(
                   children: [
@@ -170,6 +225,7 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
                               ],
                             ),
                             child: profile == null && editState.loading
+                            // Initial loading state (no data yet).
                                 ? const SizedBox(
                               height: 180,
                               child: Center(
@@ -179,7 +235,7 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
                                 : Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                // Title
+                                // ---------- Title ----------
                                 Row(
                                   children: const [
                                     Icon(Icons.person_outline,
@@ -206,7 +262,7 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
                                 ),
                                 const SizedBox(height: 22),
 
-                                // Error / success inline
+                                // ---------- Inline error / success ----------
                                 if (editState.error != null)
                                   _InlineMessage(
                                     text: editState.error!,
@@ -222,12 +278,15 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
                                 if (editState.error != null || _showLocalSuccess)
                                   const SizedBox(height: 20),
 
+                                // ---------- Fields ----------
                                 // Email (read only)
                                 _ReadOnlyField(
                                   label: 'Email',
                                   value: email,
                                 ),
                                 const SizedBox(height: 16),
+
+                                // First Name
                                 _EditableField(
                                   label: 'First Name',
                                   controller: _firstNameCtl,
@@ -235,6 +294,8 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
                                   onChanged: (_) => setState(() {}),
                                 ),
                                 const SizedBox(height: 16),
+
+                                // Last Name
                                 _EditableField(
                                   label: 'Last Name',
                                   controller: _lastNameCtl,
@@ -242,6 +303,8 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
                                   onChanged: (_) => setState(() {}),
                                 ),
                                 const SizedBox(height: 16),
+
+                                // Username (optional)
                                 _EditableField(
                                   label: 'Username (optional)',
                                   controller: _usernameCtl,
@@ -250,6 +313,8 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
                                 ),
 
                                 const SizedBox(height: 30),
+
+                                // ---------- Primary action ----------
                                 SizedBox(
                                   width: double.infinity,
                                   child: ElevatedButton.icon(
@@ -296,8 +361,10 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
             ],
           ),
         ),
+
+        // Optional: lightweight overlay when a background refresh occurs
+        // (i.e., loading but we still have existing profile data).
         if (editState.loading && profile != null)
-        // Light overlay while reloading (if necessary)
           Positioned.fill(
             child: IgnorePointer(
               ignoring: true,
@@ -313,6 +380,9 @@ class _ProfileEditScreenState extends ConsumerState<ProfileEditScreen> {
 
 /* ---------------------------- Helper Widgets ---------------------------- */
 
+// =============================================================
+// Cupertino-like "Back" button with subtle glass styling.
+// =============================================================
 class _CupertinoBackButton extends StatelessWidget {
   final VoidCallback? onTap;
   final String label;
@@ -351,6 +421,9 @@ class _CupertinoBackButton extends StatelessWidget {
   }
 }
 
+// =============================================================
+// Inline banner for success/error messages within the card.
+// =============================================================
 class _InlineMessage extends StatelessWidget {
   final String text;
   final Color color;
@@ -390,6 +463,9 @@ class _InlineMessage extends StatelessWidget {
   }
 }
 
+// =============================================================
+// Read-only value field styled to match editable inputs.
+// =============================================================
 class _ReadOnlyField extends StatelessWidget {
   final String label;
   final String value;
@@ -416,6 +492,9 @@ class _ReadOnlyField extends StatelessWidget {
   }
 }
 
+// =============================================================
+// Labeled editable text field with glass styling and hint.
+// =============================================================
 class _EditableField extends StatelessWidget {
   final String label;
   final TextEditingController controller;
@@ -462,6 +541,9 @@ class _EditableField extends StatelessWidget {
   }
 }
 
+// =============================================================
+// Shared label + field wrapper for consistent spacing/typography.
+// =============================================================
 class _FieldWrapper extends StatelessWidget {
   final String label;
   final Widget child;
