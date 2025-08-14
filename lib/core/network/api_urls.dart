@@ -32,106 +32,61 @@ enum AppEnv { dev, prod }
 /// - api (root + "api/")
 /// - base segments for accounts/auth and versioned API namespaces
 class AppConfig {
-  /// Current environment target.
+  // Force local SeedsWild base as requested
   static const AppEnv env = AppEnv.prod;
-
-  /// URL scheme. Defaults to https in prod and http in dev.
-  /// Change to 'http' if your local server is not using HTTPS.
-  static String get protocol => env == AppEnv.prod ? 'https' : 'http';
-
-  /// Host (and optional port) for the current environment.
-  /// - Android emulator tip: use 10.0.2.2:8000 to reach the host machine.
-  /// - iOS simulator tip: use 127.0.0.1:8000.
-  static String get domain {
-    switch (env) {
-      case AppEnv.dev:
-        return '127.0.0.1:8000';
-      case AppEnv.prod:
-        return 'seedswild.com';
-    }
-  }
-
-  /// Root URL (e.g., https://seedswild.com/).
+  static String get protocol => 'http';
+  static String get domain => '192.168.1.2:9000';
   static String get root => '$protocol://$domain/';
+  static String get api => root;
+  static String get v1 => '${root}api/v1/';
 
-  /// API root (e.g., https://seedswild.com/api/).
-  static String get api => '${root}api/';
-
-  // -----------------------------------------------------------
-  // Namespaced bases (compose specific endpoint groups below)
-  // -----------------------------------------------------------
-
-  /// Base for account-related APIs (e.g., https://.../api/accounts/).
-  static String get accountsBase => '${api}accounts/';
-
-  /// Base for auth-related APIs under accounts (e.g., https://.../api/accounts/auth/).
-  static String get authBase => '${accountsBase}auth/';
-
-  /// Versioned API base (e.g., https://.../api/v1/).
-  static String get v1 => '${api}v1/';
+  // Force Token scheme for SeedsWild token-based auth
+  static String get authHeaderScheme => 'Token';
 }
 
 /// APIUrl exposes concrete, ready-to-use endpoint strings.
 /// Keep naming consistent and avoid duplicating the same endpoint under
 /// different names. If an endpoint changes, update it here.
 class APIUrl {
-  // -----------------------------------------------------------
-  // Authentication / Registration (dj-rest-auth)
-  // -----------------------------------------------------------
+  // SeedsWild authentication endpoints
+  static String get signIn => '${AppConfig.root}auth/login/';
+  static String get signUp => '${AppConfig.root}auth/registration/';
+  static String get logout => '${AppConfig.root}auth/logout/';
 
-  /// Sign in: POST credentials.
-  static String get signIn => '${AppConfig.authBase}login/';
+  // Profile (your server exposes auth/profile/ → user_retrieve_update)
+  static String get userDetails => '${AppConfig.root}auth/profile/';
+  static String get passwordChange => '${AppConfig.root}auth/password/change/';
+  static String get passwordReset => '${AppConfig.root}auth/password/reset/';
+  static String get passwordResetConfirm =>
+      '${AppConfig.root}auth/password/reset/confirm/';
+  static String get resendEmail =>
+      '${AppConfig.root}auth/registration/resend-email/';
+  static String get verifyEmail =>
+      '${AppConfig.root}auth/registration/verify-email/';
 
-  /// Sign up: POST new user registration data.
-  static String get signUp => '${AppConfig.authBase}registration/';
-
-  /// Logout: POST to invalidate token/session.
-  static String get logout => '${AppConfig.authBase}logout/';
-
-  // -----------------------------------------------------------
-  // User profile/info (dj-rest-auth user endpoint)
-  // -----------------------------------------------------------
-
-  /// Authenticated user's details: GET (read), PUT/PATCH (update).
-  static String get userDetails => '${AppConfig.authBase}user/';
-
-  // -----------------------------------------------------------
-  // Password management (dj-rest-auth)
-  // -----------------------------------------------------------
-
-  /// Change password (authenticated): POST old_password/new_passwords.
-  /// Example: https://seedswild.com/api/accounts/auth/password/change/
-  static String get passwordChange => '${AppConfig.authBase}password/change/';
-
-  /// Request password reset email (anonymous): POST email.
-  static String get passwordReset => '${AppConfig.authBase}password/reset/';
-
-  // -----------------------------------------------------------
-  // Example feature endpoints (versioned API)
-  // -----------------------------------------------------------
-
-  /// Example home feed or landing data (versioned).
-  static String get home => '${AppConfig.v1}home/';
-
-  /// Mark all notifications as read (example).
-  static String get notificationsMarkRead =>
-      '${AppConfig.v1}notification/mark-all-as-read/';
-
-  // -----------------------------------------------------------
-  // Utilities
-  // -----------------------------------------------------------
-
-  /// Build a fully-qualified API URL from a relative path (without leading slash).
-  ///
-  /// Example:
-  ///   APIUrl.absolute('accounts/auth/login/')
-  ///   -> https://<domain>/api/accounts/auth/login/
-  ///
-  /// If the input starts with '/', it will be normalized to avoid '//' in the URL.
   static String absolute(String relativeWithoutLeadingSlash) {
     if (relativeWithoutLeadingSlash.startsWith('/')) {
-      return '${AppConfig.api}${relativeWithoutLeadingSlash.substring(1)}';
+      return '${AppConfig.root}${relativeWithoutLeadingSlash.substring(1)}';
     }
-    return '${AppConfig.api}$relativeWithoutLeadingSlash';
+    return '${AppConfig.root}$relativeWithoutLeadingSlash';
   }
+
+  // v1 Scans
+  static String get scans => '${AppConfig.v1}scans/';
+  static String scanById(int id) => '${AppConfig.v1}scans/$id/';
+  static String get scansProcess => '${AppConfig.v1}scans/process/';
+
+  // Nested
+  static String scansGpsPoints(int scanId) =>
+      '${AppConfig.v1}scans/$scanId/gps-points/';
+  static String scansImages(int scanId) =>
+      '${AppConfig.v1}scans/$scanId/images/';
+  static String scansPointCloud(int scanId) =>
+      '${AppConfig.v1}scans/$scanId/point-cloud/';
+  static String scansUploadStatus(int scanId) =>
+      '${AppConfig.v1}scans/$scanId/upload-status/';
+
+  // Standalone gps-point by id
+  static String scanGpsPointById(int id) =>
+      '${AppConfig.v1}scan/gps-points/$id/';
 }

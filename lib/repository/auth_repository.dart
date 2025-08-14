@@ -54,11 +54,21 @@ class AuthRepository {
     // isToken=false (not authenticated yet), noJson=false (send JSON)
     final res = await api.postAPI(APIUrl.signIn, body, false, false);
 
-    // dj-rest-auth returns {"key": "<token>"} on success
-    if (res is Map && res['key'] != null) {
-      final token = res['key'] as String;
-      await AuthToken.saveToken(token);
-      return token;
+    // Accept token from common shapes
+    if (res is Map) {
+      dynamic tokenVal = res['token'] ?? res['key'] ?? res['auth_token'];
+      // Nested under data: {...}
+      if (tokenVal == null && res['data'] is Map) {
+        final m = res['data'] as Map;
+        tokenVal = m['token'] ?? m['key'] ?? m['auth_token'] ?? m['access'];
+      }
+      // Fallback: access (JWT)
+      tokenVal ??= res['access'];
+      if (tokenVal is String && tokenVal.isNotEmpty) {
+        final token = tokenVal;
+        await AuthToken.saveToken(token);
+        return token;
+      }
     }
     throw Exception('Token not found in login response');
   }
@@ -111,12 +121,19 @@ class AuthRepository {
   // - String message from server or a default "Logged out"
   // -----------------------------------------------------------
   Future<String> logoutRemote({String? csrfToken}) async {
-    // isToken=true (authenticated), noJson=false (send JSON)
-    final res = await api.postAPI(APIUrl.logout, {}, true, false);
-    if (res is Map && res['detail'] != null) {
-      return res['detail'].toString();
+    try {
+      final res = await api.postAPI(APIUrl.logout, {}, true, false);
+      if (res is Map && res['detail'] != null) {
+        return res['detail'].toString();
+      }
+      return 'Logged out';
+    } catch (_) {
+      final res = await api.getAPI(APIUrl.logout, true);
+      if (res is Map && res['detail'] != null) {
+        return res['detail'].toString();
+      }
+      return 'Logged out';
     }
-    return 'Logged out';
   }
 
   // -----------------------------------------------------------
@@ -126,6 +143,9 @@ class AuthRepository {
   Future<void> logout() async {
     await AuthToken.removeToken();
   }
+
+  // Token refresh if your server supports it (optional placeholder)
+  // Future<String> refreshToken() async { ... }
 
   // -----------------------------------------------------------
   // changePassword

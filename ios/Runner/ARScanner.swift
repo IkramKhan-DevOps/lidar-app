@@ -99,7 +99,7 @@ class ScanLocalStorage {
         }
     }
 
-    func finalizeScanFolder(tempFolderURL: URL, name: String?, coordinates: [[Double]]? = nil, coordinateTimestamps: [Double]? = nil, imageCount: Int, durationSeconds: Double? = nil) async -> (url: URL?, metadata: ScanMetadata?) {
+    func finalizeScanFolder(tempFolderURL: URL, name: String?, coordinates: [[Double]]? = nil, coordinateTimestamps: [Double]? = nil, imageCount: Int, durationSeconds: Double? = nil, onComplete: ((URL, ScanMetadata) -> Void)? = nil) async -> (url: URL?, metadata: ScanMetadata?) {
         let scanID = UUID().uuidString
         let timestamp = Date()
         let dateFormatter = DateFormatter()
@@ -180,6 +180,10 @@ class ScanLocalStorage {
             try fileManager.removeItem(at: tempFolderURL)
 
             os_log("Finalized scan folder: %@", log: OSLog.default, type: .info, finalFolderURL.path)
+            
+            // Trigger the completion callback to start backend upload
+            onComplete?(finalFolderURL, metadata)
+            
             return (finalFolderURL, metadata)
         } catch {
             os_log("Failed to finalize scan folder: %@", log: OSLog.default, type: .error, error.localizedDescription)
@@ -426,6 +430,18 @@ class ScanLocalStorage {
         os_log("Folder access requested: %@", log: OSLog.default, type: .info, folderPath)
         return "Folder access requested: \(folderPath)"
     }
+
+    // Static method to trigger backend upload
+    static func triggerBackendUpload(for folderURL: URL) {
+        os_log("🚀 [SCAN STORAGE] Triggering backend upload for: %@", log: OSLog.default, type: .info, folderURL.path)
+        
+        // Post notification to AppDelegate to handle the upload
+        NotificationCenter.default.post(
+            name: NSNotification.Name("UploadScanToBackend"),
+            object: nil,
+            userInfo: ["folderPath": folderURL.path]
+        )
+    }
 }
 
 // MARK: - ARScannerDelegate
@@ -438,6 +454,7 @@ protocol ARScannerDelegate: AnyObject {
     func arScanner(_ scanner: ARScanner, didCaptureDebugImage image: UIImage)
     func arScanner(_ scanner: ARScanner, promptForScanName completion: @escaping (String?) -> Void)
     func arScanner(_ scanner: ARScanner, didUpdateDuration duration: Double)
+    func arScanner(_ scanner: ARScanner, triggerBackendUpload folderURL: URL)
 }
 
 @available(iOS 13.4, *)
@@ -570,6 +587,11 @@ class ARScanner: NSObject {
                     do {
                         let zipData = try self.exportDataAsZip()
                         _ = ScanLocalStorage.shared.saveInputZip(zipData, to: finalFolderURL)
+                        
+                        // NOW trigger backend upload after ZIP is saved
+                        os_log("📦 [AR SCANNER] ZIP saved, triggering backend upload for: %@", log: OSLog.default, type: .info, finalFolderURL.path)
+                        ScanLocalStorage.triggerBackendUpload(for: finalFolderURL)
+                        
                     } catch {
                         os_log("Failed to save scan data: %@", log: OSLog.default, type: .error, error.localizedDescription)
                         DispatchQueue.main.async {
@@ -1020,6 +1042,8 @@ class ARScanner: NSObject {
             updateStatus("Your device is getting warm. Take a quick break to cool it down.", isCritical: true)
         }
     }
+
+
 }
 
 @available(iOS 13.4, *)
@@ -1263,7 +1287,7 @@ extension ARCamera.TrackingState: CustomStringConvertible {
 }
 
 @available(iOS 13.4, *)
-class ScanViewController: UIViewController {
+class ScanViewController: UIViewController, ARScannerDelegate {
     private let arScanner = ARScanner()
     let captureManager = ScanCaptureManager()
     let controlPanel = ControlPanel()
@@ -1301,6 +1325,23 @@ class ScanViewController: UIViewController {
     private func setupFlutterChannel() {
         if let flutterController = UIApplication.shared.delegate?.window??.rootViewController as? FlutterViewController {
             channel = FlutterMethodChannel(name: "com.demo.channel/message", binaryMessenger: flutterController.binaryMessenger)
+            
+            // Set up method call handler for this channel
+            channel?.setMethodCallHandler { [weak self] call, result in
+                guard let self = self else {
+                    result(FlutterError(code: "INSTANCE_DEALLOCATED", message: "ScanViewController was deallocated", details: nil))
+                    return
+                }
+                
+                os_log("🔍 [SCAN VIEW CHANNEL] Received method call: %@ with arguments: %@", log: OSLog.default, type: .info, call.method, String(describing: call.arguments))
+                
+                switch call.method {
+                case "uploadScanToBackend":
+                    self.handleUploadScanToBackend(call: call, result: result)
+                default:
+                    result(FlutterMethodNotImplemented)
+                }
+            }
         } else {
             os_log("Failed to initialize Flutter method channel", log: OSLog.default, type: .error)
         }
@@ -1394,6 +1435,12 @@ class ScanViewController: UIViewController {
     }
 
     @objc private func closeTapped() {
+        // If there's a scan folder, trigger backend upload before closing
+        if let tempFolderURL = arScanner.currentScanFolderURL {
+            os_log("🚪 [CLOSE] Close button tapped, triggering backend upload for: %@", log: OSLog.default, type: .info, tempFolderURL.path)
+            ScanLocalStorage.triggerBackendUpload(for: tempFolderURL)
+        }
+        
         arScanner.stopScan()
         captureManager.cleanupCaptureDirectory()
         if let tempFolderURL = arScanner.currentScanFolderURL {
@@ -1419,10 +1466,7 @@ class ScanViewController: UIViewController {
         feedbackGenerator.prepare()
         feedbackGenerator.notificationOccurred(type)
     }
-}
 
-@available(iOS 13.4, *)
-extension ScanViewController: ARScannerDelegate {
     func arScanner(_ scanner: ARScanner, didUpdateDuration duration: Double) {
         DispatchQueue.main.async {
             self.controlPanel.updateDuration(duration)
@@ -1444,52 +1488,99 @@ extension ScanViewController: ARScannerDelegate {
 
     func arScannerDidStopScanning(_ scanner: ARScanner) {
         DispatchQueue.main.async {
-            self.activityIndicator?.startAnimating()
+            self.activityIndicator?.stopAnimating()
             self.controlPanel.updateUIForScanningState(isScanning: false,
                                                       hasMeshes: !scanner.getCapturedMeshes().isEmpty)
             if !scanner.getCapturedMeshes().isEmpty {
-                if let folderURL = scanner.currentScanFolderURL {
-                    let metadataURL = folderURL.appendingPathComponent("metadata.json")
-                    do {
-                        let data = try Data(contentsOf: metadataURL)
-                        let decoder = JSONDecoder()
-                        decoder.dateDecodingStrategy = .iso8601
-                        let metadata = try decoder.decode(ScanMetadata.self, from: data)
-                        let dateFormatter = ISO8601DateFormatter()
-                        let usdzURL = ScanLocalStorage.shared.hasUSDZModel(in: folderURL) ? folderURL.appendingPathComponent("model.usdz") : nil
-                        self.channel?.invokeMethod("scanComplete", arguments: [
-                            "scanID": metadata.scanID,
-                            "name": metadata.name,
-                            "usdzPath": usdzURL?.path as Any,
-                            "folderPath": folderURL.path,
-                            "hasUSDZ": usdzURL != nil,
-                            "timestamp": dateFormatter.string(from: metadata.timestamp),
-                            "coordinates": metadata.coordinates ?? [],
-                            "coordinateTimestamps": metadata.coordinateTimestamps ?? [], // Include timestamps
-                            "locationName": metadata.locationName ?? "",
-                            "modelSizeBytes": metadata.modelSizeBytes ?? 0,
-                            "imageCount": metadata.imageCount,
-                            "durationSeconds": metadata.durationSeconds ?? 0.0
-                        ]) { result in
-                            if let error = result as? FlutterError {
-                                os_log("Failed to invoke scanComplete: %@", log: OSLog.default, type: .error, error.message ?? "Unknown error")
-                            }
-                            DispatchQueue.main.async {
-                                self.activityIndicator?.stopAnimating()
-                                self.showModelView()
-                            }
-                        }
-                    } catch {
-                        os_log("Failed to read metadata: %@", log: OSLog.default, type: .error, error.localizedDescription)
-                        self.activityIndicator?.stopAnimating()
-                        self.showAlert(title: "Save Error", message: "Failed to read scan metadata. Please try again.")
-                    }
-                } else {
-                    self.activityIndicator?.stopAnimating()
-                    self.showAlert(title: "Save Error", message: "Scan folder not found. Please try again.")
-                }
+                // Show "Done" button instead of automatically processing
+                self.showDoneButton()
             } else {
                 self.activityIndicator?.stopAnimating()
+            }
+        }
+    }
+    
+    private func showDoneButton() {
+        // Create a "Done" button overlay
+        let doneButton = UIButton(type: .system)
+        doneButton.setTitle("Done", for: .normal)
+        doneButton.setTitleColor(.white, for: .normal)
+        doneButton.backgroundColor = .systemGreen
+        doneButton.layer.cornerRadius = 25
+        doneButton.titleLabel?.font = .systemFont(ofSize: 18, weight: .semibold)
+        doneButton.addTarget(self, action: #selector(doneButtonTapped), for: .touchUpInside)
+        doneButton.translatesAutoresizingMaskIntoConstraints = false
+        
+        // Remove any existing done button
+        view.viewWithTag(999)?.removeFromSuperview()
+        doneButton.tag = 999
+        
+        view.addSubview(doneButton)
+        
+        NSLayoutConstraint.activate([
+            doneButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            doneButton.bottomAnchor.constraint(equalTo: controlPanel.topAnchor, constant: -30),
+            doneButton.widthAnchor.constraint(equalToConstant: 120),
+            doneButton.heightAnchor.constraint(equalToConstant: 50)
+        ])
+        
+        // Animate the button appearance
+        doneButton.alpha = 0
+        doneButton.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
+        UIView.animate(withDuration: 0.3) {
+            doneButton.alpha = 1
+            doneButton.transform = .identity
+        }
+    }
+    
+    @objc private func doneButtonTapped() {
+        guard let folderURL = arScanner.currentScanFolderURL else {
+            showAlert(title: "Error", message: "Scan folder not found. Please try again.")
+            return
+        }
+        
+        // Trigger backend upload
+        os_log("✅ [DONE BUTTON] Done button tapped, triggering backend upload for: %@", log: OSLog.default, type: .info, folderURL.path)
+        ScanLocalStorage.triggerBackendUpload(for: folderURL)
+        
+        // Show success feedback
+        generateHapticFeedback(.success)
+        
+        // Remove the done button
+        view.viewWithTag(999)?.removeFromSuperview()
+        
+        // Show success message
+        let successLabel = UILabel()
+        successLabel.text = "✅ Scan uploaded to backend!"
+        successLabel.textColor = .white
+        successLabel.backgroundColor = UIColor.systemGreen.withAlphaComponent(0.8)
+        successLabel.textAlignment = .center
+        successLabel.layer.cornerRadius = 15
+        successLabel.clipsToBounds = true
+        successLabel.font = .systemFont(ofSize: 16, weight: .medium)
+        successLabel.translatesAutoresizingMaskIntoConstraints = false
+        successLabel.tag = 998
+        
+        view.addSubview(successLabel)
+        
+        NSLayoutConstraint.activate([
+            successLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            successLabel.bottomAnchor.constraint(equalTo: controlPanel.topAnchor, constant: -30),
+            successLabel.widthAnchor.constraint(equalToConstant: 250),
+            successLabel.heightAnchor.constraint(equalToConstant: 40)
+        ])
+        
+        // Animate and remove after delay
+        successLabel.alpha = 0
+        UIView.animate(withDuration: 0.3, animations: {
+            successLabel.alpha = 1
+        }) { _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                UIView.animate(withDuration: 0.3, animations: {
+                    successLabel.alpha = 0
+                }) { _ in
+                    successLabel.removeFromSuperview()
+                }
             }
         }
     }
@@ -1522,6 +1613,50 @@ extension ScanViewController: ARScannerDelegate {
 
             self.present(alert, animated: true)
         }
+    }
+    
+    func arScanner(_ scanner: ARScanner, triggerBackendUpload folderURL: URL) {
+        // Trigger backend upload immediately after scan completion
+        os_log("🚀 [SCAN VIEW] Triggering backend upload for scan folder: %@", log: OSLog.default, type: .info, folderURL.path)
+        
+        // Call the backend upload method through the platform channel
+        self.channel?.invokeMethod("uploadScanToBackend", arguments: [
+            "folderPath": folderURL.path
+        ]) { result in
+            if let error = result as? FlutterError {
+                os_log("❌ [SCAN VIEW] Failed to trigger backend upload: %@", log: OSLog.default, type: .error, error.message ?? "Unknown error")
+            } else {
+                os_log("✅ [SCAN VIEW] Backend upload triggered successfully", log: OSLog.default, type: .info)
+            }
+        }
+    }
+    
+    private func handleUploadScanToBackend(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        os_log("🔍 [SCAN VIEW HANDLER] Method called with arguments: %@", log: OSLog.default, type: .info, String(describing: call.arguments))
+        
+        guard let args = call.arguments as? [String: Any],
+              let folderPath = args["folderPath"] as? String else {
+            os_log("❌ [SCAN VIEW HANDLER] Invalid arguments: %@", log: OSLog.default, type: .error, String(describing: call.arguments))
+            result(FlutterError(
+                code: "INVALID_ARGUMENT",
+                message: "Invalid or missing folder path for uploadScanToBackend.",
+                details: nil
+            ))
+            return
+        }
+        
+        let folderURL = URL(fileURLWithPath: folderPath)
+        os_log("🚀 [SCAN VIEW HANDLER] Starting immediate backend upload for scan: %@", log: OSLog.default, type: .info, folderPath)
+        
+        // Call the AppDelegate's upload method through a different approach
+        // Since we can't directly access AppDelegate from here, we'll use a notification
+        NotificationCenter.default.post(
+            name: NSNotification.Name("UploadScanToBackend"),
+            object: nil,
+            userInfo: ["folderPath": folderPath]
+        )
+        
+        result("Upload request sent to AppDelegate")
     }
 }
 

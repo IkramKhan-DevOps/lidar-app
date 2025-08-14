@@ -24,6 +24,7 @@ import 'package:http/http.dart' as http;
 import '../errors/app_exceptions.dart';
 import '../storage/auth_storage.dart';
 import 'api_network_base.dart';
+import 'api_urls.dart';
 
 class NetworkApiService extends BaseApiService {
   // Default timeouts per operation type.
@@ -38,7 +39,28 @@ class NetworkApiService extends BaseApiService {
   Map<String, String> _headers({String? token, bool json = true}) {
     final h = <String, String>{};
     if (token != null && token.isNotEmpty) {
-      h['Authorization'] = 'Token $token';
+      // Determine auth scheme: auto/Bearer/Token
+      String scheme;
+      switch (AppConfig.authHeaderScheme) {
+        case 'Bearer':
+          scheme = 'Bearer';
+          break;
+        case 'Token':
+          scheme = 'Token';
+          break;
+        case 'auto':
+        default:
+          // Heuristic: JWTs usually contain two dots
+          final isJwt = token.split('.').length == 3;
+          scheme = isJwt ? 'Bearer' : 'Token';
+      }
+      h['Authorization'] = '$scheme $token';
+      // Also send token via cookie for backends that read from session/csrf middleware
+      h['Cookie'] = 'token=$token';
+      // debug: print masked auth header
+      // ignore: avoid_print
+      print(
+          '[NET] Auth: $scheme ${token.substring(0, token.length > 6 ? 6 : token.length)}***');
     }
     if (json) {
       h['Content-Type'] = 'application/json';
@@ -91,10 +113,10 @@ class NetworkApiService extends BaseApiService {
 
       final res = await http
           .post(
-        Uri.parse(url),
-        headers: _headers(token: token, json: sendJson),
-        body: body,
-      )
+            Uri.parse(url),
+            headers: _headers(token: token, json: sendJson),
+            body: body,
+          )
           .timeout(_writeTimeout);
 
       _debug('POST', url, res, requestBody: body);
@@ -119,10 +141,10 @@ class NetworkApiService extends BaseApiService {
 
       final res = await http
           .put(
-        Uri.parse(url),
-        headers: _headers(token: token),
-        body: body,
-      )
+            Uri.parse(url),
+            headers: _headers(token: token),
+            body: body,
+          )
           .timeout(_writeTimeout);
 
       _debug('PUT', url, res, requestBody: body);
@@ -147,9 +169,9 @@ class NetworkApiService extends BaseApiService {
 
       final res = await http
           .delete(
-        Uri.parse(url),
-        headers: _headers(token: token),
-      )
+            Uri.parse(url),
+            headers: _headers(token: token),
+          )
           .timeout(_writeTimeout);
 
       _debug('DELETE', url, res);
@@ -197,17 +219,17 @@ class NetworkApiService extends BaseApiService {
     final body = res.body;
     switch (res.statusCode) {
       case 400:
-      // Typically validation errors (bad input)
+        // Typically validation errors (bad input)
         throw BadRequestException(body);
       case 401:
       case 403:
-      // Auth/permission problems
+        // Auth/permission problems
         throw UnauthorizedException(body);
       case 404:
-      // Resource not found
+        // Resource not found
         throw FetchDataException('404 Not Found: $body');
       default:
-      // Other server or client errors
+        // Other server or client errors
         throw FetchDataException('Status ${res.statusCode}: $body');
     }
   }

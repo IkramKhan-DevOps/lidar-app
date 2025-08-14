@@ -37,7 +37,7 @@ class ProfileRepository {
   // - Whatever exceptions the API service surfaces (e.g., Unauthorized).
   // -----------------------------------------------------------
   Future<ProfileModel> fetchUserDetails() async {
-    // isToken=true: include Authorization header
+    // isToken=true: include Authorization header (Token scheme)
     final json = await api.getAPI(APIUrl.userDetails, true);
     return ProfileModel.fromJson(json);
   }

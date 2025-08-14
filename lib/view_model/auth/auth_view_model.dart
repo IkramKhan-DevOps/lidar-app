@@ -46,20 +46,28 @@ class AuthViewModel extends StateNotifier<AuthState> {
     }
     if (state.isSubmitting) return; // prevent duplicate submissions
 
-    state = state.copyWith(flow: AuthFlow.loading, isSubmitting: true, error: null);
+    state =
+        state.copyWith(flow: AuthFlow.loading, isSubmitting: true, error: null);
     try {
       final token = await _authRepo.login(email: email, password: password);
-      final profile = await _profileRepo.fetchProfile();
 
-      // Broadcast profile to interested listeners.
-      _ref.read(profileNotifierProvider.notifier).setProfile(profile);
-
+      // Immediately mark authenticated so navigation can proceed.
       state = state.copyWith(
         flow: AuthFlow.authenticated,
         token: token,
-        profile: profile,
         isSubmitting: false,
       );
+
+      // Fetch profile in the background; tolerate failures.
+      try {
+        // Allow SharedPreferences write to flush before first authorized call.
+        await Future.delayed(const Duration(milliseconds: 150));
+        final profile = await _profileRepo.fetchProfile();
+        _ref.read(profileNotifierProvider.notifier).setProfile(profile);
+        state = state.copyWith(profile: profile);
+      } catch (_) {
+        // Keep authenticated; profile can be loaded later.
+      }
     } catch (e) {
       _emitError(_mapError(e));
     }
@@ -84,7 +92,8 @@ class AuthViewModel extends StateNotifier<AuthState> {
     }
     if (state.isSubmitting) return;
 
-    state = state.copyWith(flow: AuthFlow.loading, isSubmitting: true, error: null);
+    state =
+        state.copyWith(flow: AuthFlow.loading, isSubmitting: true, error: null);
     try {
       final msg = await _authRepo.register(
         username: username,
@@ -114,18 +123,21 @@ class AuthViewModel extends StateNotifier<AuthState> {
 
     state = state.copyWith(flow: AuthFlow.loading, isSubmitting: true);
     try {
-      final profile = await _profileRepo.fetchProfile();
-
-      _ref.read(profileNotifierProvider.notifier).setProfile(profile);
-
+      // Mark authenticated with token first.
       state = state.copyWith(
         flow: AuthFlow.authenticated,
         token: token,
-        profile: profile,
         isSubmitting: false,
       );
+      // Try to fetch profile but don't drop session on failure.
+      try {
+        final profile = await _profileRepo.fetchProfile();
+        _ref.read(profileNotifierProvider.notifier).setProfile(profile);
+        state = state.copyWith(profile: profile);
+      } catch (_) {
+        // ignore; UI remains authenticated and can retry later
+      }
     } catch (_) {
-      // If profile fetch fails, ensure full local logout/reset.
       await _authRepo.logout();
       state = AuthState.initial();
     }
@@ -187,7 +199,7 @@ class AuthViewModel extends StateNotifier<AuthState> {
     if (start != -1 && end != -1 && end > start) {
       try {
         final decoded =
-        jsonDecode(raw.substring(start, end + 1)) as Map<String, dynamic>;
+            jsonDecode(raw.substring(start, end + 1)) as Map<String, dynamic>;
         for (final entry in decoded.entries) {
           final val = entry.value;
           if (val is List && val.isNotEmpty) return val.first.toString();
