@@ -548,6 +548,11 @@ class ARScanner: NSObject {
         imageCount = 0
         scanStartTime = Date()
         scanDuration = 0.0
+        
+        // Start location manager for GPS coordinates
+        locationManager.startUpdatingLocation()
+        os_log("📍 [AR SCANNER] Started location manager for GPS tracking", log: OSLog.default, type: .info)
+        
         updateStatus("Ready to scan! Move your device slowly to capture the scene.", isCritical: true)
         updateDuration()
     }
@@ -557,6 +562,11 @@ class ARScanner: NSObject {
         isProcessingFrames = false
         arView.session.pause()
         isScanning = false
+        
+        // Stop location manager
+        locationManager.stopUpdatingLocation()
+        os_log("📍 [AR SCANNER] Stopped location manager, captured %d GPS coordinates", log: OSLog.default, type: .info, coordinates.count)
+        
         if let startTime = scanStartTime {
             scanDuration = Date().timeIntervalSince(startTime)
         }
@@ -586,7 +596,14 @@ class ARScanner: NSObject {
 
                     do {
                         let zipData = try self.exportDataAsZip()
-                        _ = ScanLocalStorage.shared.saveInputZip(zipData, to: finalFolderURL)
+                        os_log("📦 [AR SCANNER] ZIP data created, size: %d bytes", log: OSLog.default, type: .info, zipData.count)
+                        
+                        let savedZipURL = ScanLocalStorage.shared.saveInputZip(zipData, to: finalFolderURL)
+                        if let savedZipURL = savedZipURL {
+                            os_log("📦 [AR SCANNER] ZIP saved successfully to: %@", log: OSLog.default, type: .info, savedZipURL.path)
+                        } else {
+                            os_log("❌ [AR SCANNER] Failed to save ZIP file", log: OSLog.default, type: .error)
+                        }
                         
                         // REMOVED: Immediate backend upload trigger
                         // Now we wait for user to click "Done" or close the page
@@ -648,28 +665,45 @@ class ARScanner: NSObject {
         let tempFolderURL = fileManager.temporaryDirectory.appendingPathComponent("ScanExport_\(UUID().uuidString)")
         let zipURL = fileManager.temporaryDirectory.appendingPathComponent("input_data_\(UUID().uuidString).zip")
 
+        os_log("📦 [EXPORT ZIP] Starting ZIP creation", log: OSLog.default, type: .info)
+        os_log("📦 [EXPORT ZIP] Temp folder: %@", log: OSLog.default, type: .info, tempFolderURL.path)
+        os_log("📦 [EXPORT ZIP] ZIP URL: %@", log: OSLog.default, type: .info, zipURL.path)
+
         do {
             try fileManager.createDirectory(at: tempFolderURL, withIntermediateDirectories: true)
+            os_log("📦 [EXPORT ZIP] Created temp folder", log: OSLog.default, type: .info)
 
             let modelURL = tempFolderURL.appendingPathComponent("model.ply")
             let plyContent = try generatePLYContent()
             try plyContent.write(to: modelURL, atomically: true, encoding: .utf8)
+            os_log("📦 [EXPORT ZIP] Created PLY file: %@", log: OSLog.default, type: .info, modelURL.path)
 
             let imagesFolderURL = captureManager.captureFolderURL
             if fileManager.fileExists(atPath: imagesFolderURL.path) {
                 let destinationImagesURL = tempFolderURL.appendingPathComponent("images")
                 try fileManager.copyItem(at: imagesFolderURL, to: destinationImagesURL)
+                os_log("📦 [EXPORT ZIP] Copied images folder: %@", log: OSLog.default, type: .info, destinationImagesURL.path)
+            } else {
+                os_log("⚠️ [EXPORT ZIP] Images folder not found: %@", log: OSLog.default, type: .warning, imagesFolderURL.path)
             }
 
             let success = SSZipArchive.createZipFile(atPath: zipURL.path, withContentsOfDirectory: tempFolderURL.path)
+            os_log("📦 [EXPORT ZIP] ZIP creation result: %@", log: OSLog.default, type: .info, success ? "SUCCESS" : "FAILED")
+            
             guard success, let zipData = try? Data(contentsOf: zipURL) else {
+                os_log("❌ [EXPORT ZIP] Failed to read ZIP data", log: OSLog.default, type: .error)
                 throw NSError(domain: "ZipError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create ZIP file"])
             }
+            
+            os_log("📦 [EXPORT ZIP] ZIP created successfully, size: %d bytes", log: OSLog.default, type: .info, zipData.count)
 
             try fileManager.removeItem(at: tempFolderURL)
             try fileManager.removeItem(at: zipURL)
+            os_log("📦 [EXPORT ZIP] Cleaned up temp files", log: OSLog.default, type: .info)
+            
             return zipData
         } catch {
+            os_log("❌ [EXPORT ZIP] Error creating ZIP: %@", log: OSLog.default, type: .error, error.localizedDescription)
             try? fileManager.removeItem(at: tempFolderURL)
             try? fileManager.removeItem(at: zipURL)
             throw error
@@ -1295,6 +1329,7 @@ class ScanViewController: UIViewController, ARScannerDelegate {
     private var activityIndicator: UIActivityIndicatorView?
     private var isPresentingPreview: Bool = false
     private var channel: FlutterMethodChannel?
+    private var hasUploaded: Bool = false // Add flag to prevent double uploads
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -1435,10 +1470,13 @@ class ScanViewController: UIViewController, ARScannerDelegate {
     }
 
     @objc private func closeTapped() {
-        // If there's a scan folder, trigger backend upload before closing
-        if let tempFolderURL = arScanner.currentScanFolderURL {
+        // If there's a scan folder and we haven't uploaded yet, trigger backend upload before closing
+        if let tempFolderURL = arScanner.currentScanFolderURL, !hasUploaded {
             os_log("🚪 [CLOSE] Close button tapped, triggering backend upload for: %@", log: OSLog.default, type: .info, tempFolderURL.path)
+            hasUploaded = true
             ScanLocalStorage.triggerBackendUpload(for: tempFolderURL)
+        } else if hasUploaded {
+            os_log("🚪 [CLOSE] Close button tapped, upload already completed", log: OSLog.default, type: .info)
         }
         
         arScanner.stopScan()
@@ -1539,6 +1577,14 @@ class ScanViewController: UIViewController, ARScannerDelegate {
             showAlert(title: "Error", message: "Scan folder not found. Please try again.")
             return
         }
+        
+        // Prevent double uploads
+        guard !hasUploaded else {
+            os_log("⚠️ [DONE BUTTON] Upload already in progress, ignoring duplicate tap", log: OSLog.default, type: .warning)
+            return
+        }
+        
+        hasUploaded = true
         
         // Disable the done button to prevent multiple taps
         if let doneButton = view.viewWithTag(999) as? UIButton {

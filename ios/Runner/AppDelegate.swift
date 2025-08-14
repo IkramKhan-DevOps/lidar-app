@@ -65,7 +65,7 @@ import Network
                 case "startScan":
                     self.startLiDARScan(result: result)
                 case "getSavedScans":
-                    self.getSavedScans(call: call, result: result)
+                    self.getSavedScans(result: result)
                 case "deleteScan":
                     self.deleteScan(call: call, result: result)
                 case "openUSDZ":
@@ -908,7 +908,8 @@ import Network
                     "status": metadata.status,
                     "imageCount": metadata.imageCount,
                     "modelSizeBytes": metadata.modelSizeBytes,
-                    "durationSeconds": metadata.durationSeconds ?? 0.0
+                    "durationSeconds": metadata.durationSeconds ?? 0.0,
+                    "folderPath": scan.url.path // Add folder path for Flutter
                 ]
                 
                 if let locationName = metadata.locationName {
@@ -924,7 +925,7 @@ import Network
         }
         
         os_log("📱 [GET SAVED SCANS] Returning %d local scans", log: OSLog.default, type: .info, scanList.count)
-        result(scanList)
+        result(["scans": scanList]) // Return as map with 'scans' key
     }
 
     private func deleteScan(call: FlutterMethodCall, result: @escaping FlutterResult) {
