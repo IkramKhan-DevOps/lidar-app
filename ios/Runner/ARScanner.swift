@@ -588,9 +588,9 @@ class ARScanner: NSObject {
                         let zipData = try self.exportDataAsZip()
                         _ = ScanLocalStorage.shared.saveInputZip(zipData, to: finalFolderURL)
                         
-                        // NOW trigger backend upload after ZIP is saved
-                        os_log("📦 [AR SCANNER] ZIP saved, triggering backend upload for: %@", log: OSLog.default, type: .info, finalFolderURL.path)
-                        ScanLocalStorage.triggerBackendUpload(for: finalFolderURL)
+                        // REMOVED: Immediate backend upload trigger
+                        // Now we wait for user to click "Done" or close the page
+                        os_log("📦 [AR SCANNER] ZIP saved, waiting for user action to upload", log: OSLog.default, type: .info)
                         
                     } catch {
                         os_log("Failed to save scan data: %@", log: OSLog.default, type: .error, error.localizedDescription)
@@ -1443,9 +1443,10 @@ class ScanViewController: UIViewController, ARScannerDelegate {
         
         arScanner.stopScan()
         captureManager.cleanupCaptureDirectory()
-        if let tempFolderURL = arScanner.currentScanFolderURL {
-            try? FileManager.default.removeItem(at: tempFolderURL)
-        }
+        // Don't remove temp folder here as it might be needed for upload
+        // if let tempFolderURL = arScanner.currentScanFolderURL {
+        //     try? FileManager.default.removeItem(at: tempFolderURL)
+        // }
         channel?.invokeMethod("closeARModule", arguments: nil) { result in
             if let error = result as? FlutterError {
                 os_log("Failed to invoke closeARModule: %@", log: OSLog.default, type: .error, error.message ?? "Unknown error")
@@ -1539,15 +1540,19 @@ class ScanViewController: UIViewController, ARScannerDelegate {
             return
         }
         
+        // Disable the done button to prevent multiple taps
+        if let doneButton = view.viewWithTag(999) as? UIButton {
+            doneButton.isEnabled = false
+            doneButton.setTitle("Uploading...", for: .normal)
+            doneButton.backgroundColor = .systemGray
+        }
+        
         // Trigger backend upload
         os_log("✅ [DONE BUTTON] Done button tapped, triggering backend upload for: %@", log: OSLog.default, type: .info, folderURL.path)
         ScanLocalStorage.triggerBackendUpload(for: folderURL)
         
         // Show success feedback
         generateHapticFeedback(.success)
-        
-        // Remove the done button
-        view.viewWithTag(999)?.removeFromSuperview()
         
         // Show success message
         let successLabel = UILabel()
@@ -1570,7 +1575,7 @@ class ScanViewController: UIViewController, ARScannerDelegate {
             successLabel.heightAnchor.constraint(equalToConstant: 40)
         ])
         
-        // Animate and remove after delay
+        // Animate and remove after delay, then close the view
         successLabel.alpha = 0
         UIView.animate(withDuration: 0.3, animations: {
             successLabel.alpha = 1
@@ -1580,6 +1585,8 @@ class ScanViewController: UIViewController, ARScannerDelegate {
                     successLabel.alpha = 0
                 }) { _ in
                     successLabel.removeFromSuperview()
+                    // Close the scan view after showing success message
+                    self.closeTapped()
                 }
             }
         }
