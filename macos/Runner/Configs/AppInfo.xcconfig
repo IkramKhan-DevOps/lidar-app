@@ -8,7 +8,7 @@
 PRODUCT_NAME = platform_channel_swift_demo
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = com.example.platformChannelSwiftDemo
+PRODUCT_BUNDLE_IDENTIFIER = com.exarth.modelCraft
 
 // The copyright displayed in application information
 PRODUCT_COPYRIGHT = Copyright © 2025 com.example. All rights reserved.

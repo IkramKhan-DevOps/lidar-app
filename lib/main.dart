@@ -1,26 +1,48 @@
+// =============================================================
+// APP ENTRYPOINT (Flutter + Riverpod)
+// Hosts ProviderScope and configures the root MaterialApp.
+// Centralizes routing via AppRoutes and sets global theming.
+// =============================================================
+//
+// WHAT THIS FILE DOES
+// - Wraps the app with Riverpod's ProviderScope for DI/state.
+// - Configures MaterialApp (title, theme, routing, fallbacks).
+// - Exposes a MethodChannel for platform-specific calls.
+// - Sets the initial route to AppRoutes.splashScreen.
+//
+// USAGE
+// - Navigate by name:
+//     Navigator.of(context).pushNamed(AppRoutes.home);
+// - Generate routes dynamically via AppRoutes.onGenerateRoute.
+// - Handle unknown routes in AppRoutes.onUnknownRoute for safety.
+// - Read Riverpod providers anywhere below ProviderScope:
+//     final value = ref.watch(someProvider);
+//
+// LAYERS
+// - AppRoutes: central route table + onGenerateRoute + onUnknownRoute.
+// - ThemeData: M3 dark theme with custom font (SF Pro).
+// - MethodChannel: bridge to native iOS/Android code if needed.
+//
+// NOTES
+// - Keep SnackBar/Toast logic within screens; this file stays minimal.
+// - The MethodChannel is defined but not invoked here; call like:
+//     await ModelCraftApp.platform.invokeMethod('someNativeMethod', args);
+// - For tests, wrap the widget under test with ProviderScope:
+//     await tester.pumpWidget(const ProviderScope(child: ModelCraftApp()));
+// =============================================================
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-void main() {
-  runApp(ModelCraftApp());
-}
+import 'core/configs/app_routes.dart';
 
 class ModelCraftApp extends StatelessWidget {
   static const platform = MethodChannel('com.demo.channel/message');
-
-  Future<String> _startScan() async {
-    try {
-      final String result = await platform.invokeMethod('startScan');
-      return result;
-    } catch (e) {
-      return 'Error: ${e.toString()}';
-    }
-  }
+  const ModelCraftApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    String display = "Ready to scan your world";
-
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'ModelCraft',
@@ -29,82 +51,14 @@ class ModelCraftApp extends StatelessWidget {
         brightness: Brightness.dark,
         useMaterial3: true,
       ),
-      home: Scaffold(
-        body: Container(
-          width: double.infinity,
-          height: double.infinity,
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              colors: [
-                Color(0xFF0F2027),
-                Color(0xFF203A43),
-                Color(0xFF2C5364),
-              ],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-          ),
-          child: Center(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final isTablet = constraints.maxWidth > 600;
-                return Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Text(
-                        "ModelCraft",
-                        style: TextStyle(
-                          fontSize: isTablet ? 48 : 32,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1.5,
-                          color: Colors.white,
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        display,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: isTablet ? 22 : 16,
-                          color: Colors.white70,
-                        ),
-                      ),
-                      const SizedBox(height: 40),
-                      ElevatedButton.icon(
-                        onPressed: () async {
-                          String msg = await _startScan();
-                          display = msg;
-                          (context as Element).markNeedsBuild(); // Rebuild
-                        },
-                        style: ElevatedButton.styleFrom(
-                          padding: EdgeInsets.symmetric(
-                            horizontal: isTablet ? 40 : 24,
-                            vertical: isTablet ? 20 : 14,
-                          ),
-                          backgroundColor: Colors.tealAccent[700],
-                          foregroundColor: Colors.black,
-                          textStyle: TextStyle(
-                            fontSize: isTablet ? 20 : 16,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                        icon: const Icon(Icons.camera_alt),
-                        label: const Text("Start 3D Scan"),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ),
-        ),
-      ),
+      initialRoute: AppRoutes.splashScreen,
+      routes: AppRoutes.routes,
+      onGenerateRoute: AppRoutes.onGenerateRoute,
+      onUnknownRoute: AppRoutes.onUnknownRoute,
     );
   }
+}
+
+void main() {
+  runApp(const ProviderScope(child: ModelCraftApp()));
 }
