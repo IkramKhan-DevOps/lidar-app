@@ -17,10 +17,10 @@ import GoogleMaps
     private var scanCache: [(url: URL, metadata: ScanMetadata?)]?
     private let networkMonitor = NWPathMonitor()
     private var isOnline = false
-    private let apiBaseURL = "http://192.168.1.3:9000/api/v1" // Your API base URL
+    private let apiBaseURL = "http://192.168.1.11:9000/api/v1" // Your API base URL
     // Processing API URL function
     private func processAPIURL(scanId: Int) -> String {
-        return "http://192.168.1.3:9000/api/v1/scans/\(scanId)/process/"
+        return "http://192.168.1.11:9000/api/v1/scans/\(scanId)/process/"
     }
     private var autoSyncEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: "auto_sync_enabled") }

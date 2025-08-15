@@ -52,6 +52,7 @@ class AuthRepository {
     final body = {'email': email, 'password': password};
 
     // isToken=false (not authenticated yet), noJson=false (send JSON)
+    print(APIUrl.signIn);
     final res = await api.postAPI(APIUrl.signIn, body, false, false);
 
     // Accept token from common shapes
