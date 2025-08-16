@@ -195,7 +195,7 @@ class SyncManager extends ConsumerWidget {
           Text(
             syncState.isAutoSyncEnabled
                 ? 'Auto-sync is enabled. Scans will be automatically synchronized when you come back online.'
-                : 'Auto-sync is disabled. Use manual sync to upload pending scans.',
+                : 'Auto-sync is disabled. Enable it to synchronized local scans when you come back online.',
             style: const TextStyle(
               color: Colors.white70,
               fontSize: 13,
@@ -298,37 +298,37 @@ class SyncManager extends ConsumerWidget {
               const SizedBox(width: 12),
               
               // Manual sync button
-              ElevatedButton.icon(
-                onPressed: syncState.isSyncing
-                    ? null
-                    : () => _triggerManualSync(context, ref),
-                icon: syncState.isSyncing
-                    ? SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            Colors.white.withOpacity(0.7),
-                          ),
-                        ),
-                      )
-                    : const Icon(Icons.sync, size: 16),
-                label: Text(
-                  syncState.isSyncing 
-                    ? 'Syncing...' 
-                    : 'Manual Sync',
-                  style: const TextStyle(fontSize: 12),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blue.withOpacity(0.3),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                ),
-              ),
+              // ElevatedButton.icon(
+              //   onPressed: syncState.isSyncing
+              //       ? null
+              //       : () => _triggerManualSync(context, ref),
+              //   icon: syncState.isSyncing
+              //       ? SizedBox(
+              //           width: 16,
+              //           height: 16,
+              //           child: CircularProgressIndicator(
+              //             strokeWidth: 2,
+              //             valueColor: AlwaysStoppedAnimation<Color>(
+              //               Colors.white.withOpacity(0.7),
+              //             ),
+              //           ),
+              //         )
+              //       : const Icon(Icons.sync, size: 16),
+              //   label: Text(
+              //     syncState.isSyncing
+              //       ? 'Syncing...'
+              //       : 'Manual Sync',
+              //     style: const TextStyle(fontSize: 12),
+              //   ),
+              //   style: ElevatedButton.styleFrom(
+              //     backgroundColor: Colors.blue.withOpacity(0.3),
+              //     foregroundColor: Colors.white,
+              //     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              //     shape: RoundedRectangleBorder(
+              //       borderRadius: BorderRadius.circular(8),
+              //     ),
+              //   ),
+              // ),
             ],
           ),
           
@@ -591,7 +591,7 @@ class SyncFloatingActionButton extends ConsumerWidget {
               ),
             )
           : const Icon(Icons.cloud_upload),
-      tooltip: syncState.isSyncing 
+      tooltip: syncState.isSyncing
           ? 'Syncing...' 
           : '${syncState.initializedScansCount} scans need sync',
     );

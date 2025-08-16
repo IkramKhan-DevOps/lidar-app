@@ -58,7 +58,43 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
   bool _obscure2 = true;
 
   @override
+  void initState() {
+    super.initState();
+    // Add listeners to controllers to rebuild on text changes
+    _usernameCtl.addListener(_onInputChanged);
+    _emailCtl.addListener(_onInputChanged);
+    _pwd1Ctl.addListener(_onInputChanged);
+    _pwd2Ctl.addListener(_onInputChanged);
+  }
+
+  // Simple method to rebuild the UI when input changes
+  void _onInputChanged() {
+    setState(() {
+      // No need to do anything - just trigger rebuild
+    });
+  }
+
+  // Proper methods to toggle password visibility with setState
+  void _toggleObscure1() {
+    setState(() {
+      _obscure1 = !_obscure1;
+    });
+  }
+
+  void _toggleObscure2() {
+    setState(() {
+      _obscure2 = !_obscure2;
+    });
+  }
+
+  @override
   void dispose() {
+    // Remove listeners before disposing
+    _usernameCtl.removeListener(_onInputChanged);
+    _emailCtl.removeListener(_onInputChanged);
+    _pwd1Ctl.removeListener(_onInputChanged);
+    _pwd2Ctl.removeListener(_onInputChanged);
+
     // Always dispose controllers to avoid memory leaks.
     _usernameCtl.dispose();
     _emailCtl.dispose();
@@ -223,8 +259,8 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                   pwd2Ctl: _pwd2Ctl,
                   obscure1: _obscure1,
                   obscure2: _obscure2,
-                  toggle1: () => setState(() => _obscure1 = !_obscure1),
-                  toggle2: () => setState(() => _obscure2 = !_obscure2),
+                  toggle1: _toggleObscure1, // Use the new toggle methods
+                  toggle2: _toggleObscure2, // Use the new toggle methods
                   isLoading: authState.isSubmitting,
                   canSubmit: canSubmit,
                   passwordsMatch: _passwordsMatch,
@@ -545,7 +581,7 @@ class _SignupCard extends StatelessWidget {
 /* ----------------------------- COMPONENTS ------------------------------ */
 
 // Single labeled text field with glassy styling and optional suffix icon.
-class _Field extends StatefulWidget {
+class _Field extends StatelessWidget {
   final String label;
   final TextEditingController controller;
   final String? hintText;
@@ -563,11 +599,6 @@ class _Field extends StatefulWidget {
   });
 
   @override
-  State<_Field> createState() => _FieldState();
-}
-
-class _FieldState extends State<_Field> {
-  @override
   Widget build(BuildContext context) {
     final labelStyle = TextStyle(
       color: Colors.white.withOpacity(0.85),
@@ -578,17 +609,17 @@ class _FieldState extends State<_Field> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(widget.label, style: labelStyle),
+        Text(label, style: labelStyle),
         const SizedBox(height: 8),
         TextField(
-          controller: widget.controller,
-          obscureText: widget.obscureText,
-          keyboardType: widget.keyboardType,
+          controller: controller,
+          obscureText: obscureText,
+          keyboardType: keyboardType,
           style: const TextStyle(color: Colors.white, fontSize: 15),
           decoration: InputDecoration(
-            hintText: widget.hintText,
+            hintText: hintText,
             hintStyle: const TextStyle(color: Colors.white54),
-            suffixIcon: widget.suffixIcon,
+            suffixIcon: suffixIcon,
             filled: true,
             fillColor: Colors.white.withOpacity(0.08),
             contentPadding: const EdgeInsets.symmetric(
@@ -604,8 +635,7 @@ class _FieldState extends State<_Field> {
               borderSide: BorderSide(color: Color(0xFF3B82F6), width: 1.4),
             ),
           ),
-          // Triggers setState in parent field to refresh validation/strength UI.
-          onChanged: (_) => setState(() {}),
+          // No need for onChanged here - controller listeners handle this
         ),
       ],
     );

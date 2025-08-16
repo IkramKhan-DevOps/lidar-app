@@ -1,7 +1,9 @@
-import 'dart:io' show Platform;
+import 'dart:io' show Platform, File;
 import 'package:flutter/material.dart';
-import 'package:webview_flutter/webview_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter/services.dart';
+import 'package:model_viewer_plus/model_viewer_plus.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:http/http.dart' as http;
 
 class ModelViewerScreen extends StatefulWidget {
   final String modelUrl;
@@ -18,394 +20,457 @@ class ModelViewerScreen extends StatefulWidget {
 }
 
 class _ModelViewerScreenState extends State<ModelViewerScreen> {
-  late final WebViewController controller;
   bool isLoading = true;
   bool hasError = false;
   String? errorMessage;
   bool isUsdz = false;
-  bool showArButton = true;
+  bool isModelAccessible = false;
+  String? localFilePath;
+  static const platform = MethodChannel('com.demo.channel/message');
 
   @override
   void initState() {
     super.initState();
     print('Model URL: ${widget.modelUrl}');
     isUsdz = widget.modelUrl.toLowerCase().endsWith('.usdz');
-    _initializeWebView();
+    _checkModelAccessibility();
   }
 
-  void _initializeWebView() {
-    print('Initializing WebView');
-    controller = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(Colors.black)
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onProgress: (int progress) {
-            print('Loading progress: $progress%');
-            if (progress == 100) {
-              setState(() {
-                isLoading = false;
-              });
-            }
-          },
-          onPageStarted: (String url) {
-            print('Page started: $url');
-            setState(() {
-              isLoading = true;
-              hasError = false;
-              errorMessage = null;
-            });
-          },
-          onPageFinished: (String url) {
-            print('Page finished: $url');
-            setState(() {
-              isLoading = false;
-            });
-          },
-          onHttpError: (HttpResponseError error) {
-            print('HTTP Error: ${error.response?.statusCode} - ${error.response}');
-            setState(() {
-              isLoading = false;
-              hasError = true;
-              errorMessage = 'HTTP Error: ${error.response?.statusCode} - ${error.response}';
-            });
-          },
-          onWebResourceError: (WebResourceError error) {
-            print('WebResourceError: ${error.description}, Code: ${error.errorCode}, Type: ${error.errorType}');
-            setState(() {
-              isLoading = false;
-              hasError = true;
-              errorMessage = 'Error loading model: ${error.description} (Code: ${error.errorCode})';
-            });
-          },
-        ),
-      );
-
-    if (Platform.isIOS) {
-      controller.setUserAgent(
-        'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
-      );
-    }
-
-    _loadModelViewer();
-  }
-
-  Future<void> _launchUsdzViewer() async {
-    setState(() {
-      isLoading = true;
-    });
-
+  Future<void> _checkModelAccessibility() async {
+    setState(() => isLoading = true);
     try {
-      final uri = Uri.parse(widget.modelUrl);
-      if (await canLaunchUrl(uri)) {
-        print('Launching USDZ viewer: ${widget.modelUrl}');
-        final launched = await launchUrl(
-          uri,
-          mode: LaunchMode.externalNonBrowserApplication,
-        );
-
-        if (!launched) {
-          throw 'Failed to launch native viewer';
+      if (widget.modelUrl.startsWith('file://')) {
+        final file = File(widget.modelUrl.replaceFirst('file://', ''));
+        if (await file.exists()) {
+          localFilePath = file.path;
+          setState(() {
+            isModelAccessible = true;
+            isLoading = false;
+          });
+        } else {
+          throw Exception('Local USDZ file not found');
         }
       } else {
-        throw 'No viewer available for USDZ files';
+        final response = await http.head(Uri.parse(widget.modelUrl));
+        if (response.statusCode == 200) {
+          setState(() {
+            isModelAccessible = true;
+            isLoading = false;
+          });
+        } else {
+          throw Exception('HTTP ${response.statusCode}: Unable to access model');
+        }
       }
     } catch (e) {
-      print('USDZ launch error: $e');
+      print('Model accessibility check failed: $e');
+      setState(() {
+        hasError = true;
+        isLoading = false;
+        errorMessage = 'Unable to access model: $e';
+      });
+    }
+  }
+
+  Future<void> _downloadAndLaunchUsdz() async {
+    if (!Platform.isIOS) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('USDZ files are only supported on iOS devices'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    setState(() => isLoading = true);
+
+    try {
+      if (localFilePath == null && !widget.modelUrl.startsWith('file://')) {
+        final response = await http.get(Uri.parse(widget.modelUrl));
+        if (response.statusCode == 200) {
+          final documentsDir = await getApplicationDocumentsDirectory();
+          final fileName = widget.modelUrl.split('/').last;
+          final file = File('${documentsDir.path}/$fileName');
+          await file.writeAsBytes(response.bodyBytes);
+          localFilePath = file.path;
+          print('USDZ file downloaded to: $localFilePath');
+        } else {
+          throw Exception('Failed to download USDZ file: HTTP ${response.statusCode}');
+        }
+      } else if (widget.modelUrl.startsWith('file://')) {
+        localFilePath = widget.modelUrl.replaceFirst('file://', '');
+      }
+
+      await platform.invokeMethod('openUSDZ', {'path': localFilePath});
+      setState(() => isLoading = false);
+    } catch (e) {
+      print('USDZ handling error: $e');
+      setState(() {
+        isLoading = false;
+        hasError = true;
+        errorMessage = 'Failed to open AR viewer: $e';
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Failed to open AR viewer: $e'),
           backgroundColor: Colors.red,
         ),
       );
-    } finally {
-      setState(() {
-        isLoading = false;
-      });
     }
   }
 
-  void _loadModelViewer() {
-    if (widget.modelUrl.isEmpty || !Uri.parse(widget.modelUrl).isAbsolute) {
-      print('Invalid model URL: ${widget.modelUrl}');
-      setState(() {
-        isLoading = false;
-        hasError = true;
-        errorMessage = 'Invalid or empty model URL';
-      });
-      return;
+  void _resetViewer() {
+    setState(() {
+      isLoading = true;
+      hasError = false;
+      errorMessage = null;
+      isModelAccessible = false;
+      localFilePath = null;
+    });
+    _checkModelAccessibility();
+  }
+
+  void _showModelInfo() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.grey[900],
+        title: const Text(
+          'Model Information',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildInfoRow('Name:', widget.modelName),
+            _buildInfoRow('URL:', widget.modelUrl),
+            _buildInfoRow('Format:', isUsdz ? 'USDZ' : 'Other'),
+            _buildInfoRow('Platform:', Platform.operatingSystem),
+            _buildInfoRow('Accessible:', isModelAccessible ? 'Yes' : 'No'),
+            if (localFilePath != null) _buildInfoRow('Local Path:', localFilePath!),
+            _buildInfoRow('Direct AR Launch:', Platform.isIOS && isUsdz ? 'Supported' : 'Not Available'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close', style: TextStyle(color: Colors.blue)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildModelInfoOverlay() {
+    return Positioned(
+      top: 20,
+      left: 20,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.7),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: Colors.white.withOpacity(0.2),
+            width: 1,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              widget.modelName,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              isUsdz ? 'USDZ Model' : '3D Model',
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.7),
+                fontSize: 12,
+              ),
+            ),
+            if (localFilePath != null)
+              Text(
+                'Ready for AR Quick Look',
+                style: TextStyle(
+                  color: Colors.green.withOpacity(0.7),
+                  fontSize: 10,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildControlButtons() {
+    return Positioned(
+      bottom: 20,
+      left: 0,
+      right: 0,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _buildControlButton(
+            icon: Icons.refresh,
+            label: 'Reset',
+            onPressed: _resetViewer,
+          ),
+          const SizedBox(width: 12),
+          if (isUsdz)
+            _buildControlButton(
+              icon: Icons.view_in_ar,
+              label: Platform.isIOS ? 'AR Quick Look' : 'AR (iOS Only)',
+              onPressed: Platform.isIOS ? _downloadAndLaunchUsdz : null,
+              isPrimary: Platform.isIOS,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildErrorState() {
+    if (isUsdz && isModelAccessible && !hasError) {
+      return const SizedBox.shrink();
     }
 
-    print('Loading model viewer with URL: ${widget.modelUrl}');
-    final String htmlContent = '''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <meta http-equiv="Content-Security-Policy" content="default-src * 'unsafe-inline' 'unsafe-eval'; img-src * data:; media-src *; connect-src *;">
-        <title>3D Model Viewer</title>
-        <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
-        <style>
-            body {
-                margin: 0;
-                padding: 0;
-                background-color: #1a1a1a;
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                overflow: hidden;
-            }
-            
-            model-viewer {
-                width: 100vw;
-                height: 100vh;
-                background-color: #1a1a1a;
-                --poster-color: transparent;
-                --progress-bar-color: #007AFF;
-            }
-            
-            .loading-overlay {
-                position: absolute;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                background-color: rgba(26, 26, 26, 0.9);
-                display: flex;
-                flex-direction: column;
-                justify-content: center;
-                align-items: center;
-                z-index: 1000;
-                color: white;
-            }
-            
-            .loading-spinner {
-                width: 40px;
-                height: 40px;
-                border: 3px solid #333;
-                border-top: 3px solid #007AFF;
-                border-radius: 50%;
-                animation: spin 1s linear infinite;
-                margin-bottom: 16px;
-            }
-            
-            @keyframes spin {
-                0% { transform: rotate(0deg); }
-                100% { transform: rotate(360deg); }
-            }
-            
-            .error-overlay {
-                position: absolute;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                background-color: rgba(26, 26, 26, 0.95);
-                display: flex;
-                flex-direction: column;
-                justify-content: center;
-                align-items: center;
-                z-index: 1000;
-                color: white;
-                text-align: center;
-                padding: 20px;
-                box-sizing: border-box;
-            }
-            
-            .error-icon {
-                font-size: 48px;
-                color: #ff4444;
-                margin-bottom: 16px;
-            }
-            
-            .error-title {
-                font-size: 20px;
-                font-weight: bold;
-                margin-bottom: 8px;
-                color: #ff4444;
-            }
-            
-            .error-message {
-                font-size: 14px;
-                color: #ccc;
-                line-height: 1.4;
-            }
-            
-            .controls {
-                position: absolute;
-                bottom: 20px;
-                left: 50%;
-                transform: translateX(-50%);
-                display: flex;
-                gap: 12px;
-                z-index: 100;
-            }
-            
-            .control-btn {
-                background: rgba(0, 0, 0, 0.7);
-                border: 1px solid rgba(255, 255, 255, 0.2);
-                color: white;
-                padding: 8px 12px;
-                border-radius: 6px;
-                font-size: 12px;
-                cursor: pointer;
-                transition: all 0.2s ease;
-            }
-            
-            .control-btn:hover {
-                background: rgba(0, 0, 0, 0.9);
-                border-color: #007AFF;
-            }
-            
-            .model-info {
-                position: absolute;
-                top: 20px;
-                left: 20px;
-                background: rgba(0, 0, 0, 0.7);
-                color: white;
-                padding: 8px 12px;
-                border-radius: 6px;
-                font-size: 12px;
-                max-width: 200px;
-                z-index: 100;
-            }
-            
-            .ar-button {
-                position: absolute;
-                bottom: 80px;
-                left: 50%;
-                transform: translateX(-50%);
-                background: rgba(0, 122, 255, 0.8);
-                color: white;
-                padding: 10px 16px;
-                border-radius: 8px;
-                font-size: 14px;
-                cursor: pointer;
-                border: none;
-                z-index: 100;
-                display: flex;
-                align-items: center;
-                gap: 8px;
-            }
-            
-            .ar-button:hover {
-                background: rgba(0, 122, 255, 1);
-            }
-        </style>
-    </head>
-    <body>
-        <div id="loading" class="loading-overlay">
-            <div class="loading-spinner"></div>
-            <div>Loading 3D Model...</div>
-        </div>
-        
-        <div id="error" class="error-overlay" style="display: none;">
-            <div class="error-icon">⚠️</div>
-            <div class="error-title">Failed to Load Model</div>
-            <div class="error-message" id="error-text">
-                Unable to load the 3D model. Please check your internet connection and try again.
-            </div>
-        </div>
-        
-        <div class="model-info">
-            <div style="font-weight: bold;">${widget.modelName}</div>
-            <div style="opacity: 0.7; margin-top: 4px;">3D Model</div>
-        </div>
-        
-        <model-viewer 
-            id="modelViewer"
-            src="${widget.modelUrl}"
-            alt="3D Model of ${widget.modelName}"
-            ios-src="${widget.modelUrl}"
-            auto-rotate
-            camera-controls
-            touch-action="pan-y"
-            interaction-policy="always-allow"
-            loading="lazy"
-            ar
-            ar-modes="scene-viewer quick-look"
-            ar-scale="auto">
-            
-            <div slot="progress-bar" style="display: none;"></div>
-            
-            ${isUsdz && Platform.isIOS ? """
-            <button slot="ar-button" class="ar-button">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M10 2H14M3 7V17C3 18.1046 3.89543 19 5 19H19C20.1046 19 21 18.1046 21 17V7C21 5.89543 20.1046 5 19 5H5C3.89543 5 3 5.89543 3 7Z" stroke="white" stroke-width="2" stroke-linecap="round"/>
-                </svg>
-                View in AR
-            </button>
-            """ : ""}
-        </model-viewer>
-        
-        <div class="controls">
-            <button class="control-btn" onclick="resetCamera()">Reset View</button>
-            <button class="control-btn" onclick="toggleAutoRotate()">Toggle Rotation</button>
-        </div>
-        
-        <script>
-            const modelViewer = document.getElementById('modelViewer');
-            const loading = document.getElementById('loading');
-            const error = document.getElementById('error');
-            const errorText = document.getElementById('error-text');
-            let autoRotateEnabled = true;
-            
-            // Hide loading when model is loaded
-            modelViewer.addEventListener('load', () => {
-                loading.style.display = 'none';
-            });
-            
-            // Show error if model fails to load
-            modelViewer.addEventListener('error', (event) => {
-                loading.style.display = 'none';
-                error.style.display = 'flex';
-                errorText.textContent = 'Failed to load model: ' + (event.detail?.message || 'Unknown error');
-            });
-            
-            // Handle progress updates
-            modelViewer.addEventListener('progress', (event) => {
-                const progress = event.detail.totalProgress;
-                if (progress >= 1) {
-                    loading.style.display = 'none';
-                } else {
-                    loading.style.display = 'flex';
-                }
-            };
-            
-            function resetCamera() {
-                modelViewer.resetTurntableRotation();
-                modelViewer.jumpCameraToGoal();
-            }
-            
-            function toggleAutoRotate() {
-                autoRotateEnabled = !autoRotateEnabled;
-                if (autoRotateEnabled) {
-                    modelViewer.setAttribute('auto-rotate', '');
-                } else {
-                    modelViewer.removeAttribute('auto-rotate');
-                }
-            }
-            
-            // Timeout for slow loading
-            setTimeout(() => {
-                if (loading.style.display !== 'none') {
-                    loading.style.display = 'none';
-                    error.style.display = 'flex';
-                    errorText.textContent = 'Loading timed out. The model might be too large.';
-                }
-            }, 30000);
-        </script>
-    </body>
-    </html>
-    ''';
+    return Container(
+      color: Colors.black,
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              hasError ? Icons.error_outline : Icons.view_in_ar,
+              color: hasError ? Colors.red : Colors.blue,
+              size: 64,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              hasError ? 'Failed to Load Model' : 'Model Loading Error',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Text(
+                errorMessage ?? 'Unknown error occurred',
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 14,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton.icon(
+              onPressed: _resetViewer,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Retry'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.grey[800],
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
-    controller.loadHtmlString(htmlContent).catchError((e) {
-      print('HTML Load Error: $e');
-      setState(() {
-        isLoading = false;
-        hasError = true;
-        errorMessage = 'Failed to load HTML: $e';
-      });
-    });
+  Widget _buildLoadingState() {
+    return Container(
+      color: Colors.black.withOpacity(0.8),
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              isUsdz ? 'Preparing for AR Quick Look...' : 'Checking model accessibility...',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+              ),
+            ),
+            const SizedBox(height: 8),
+            if (isUsdz)
+              const Text(
+                'Downloading and setting up direct AR launch...',
+                style: TextStyle(
+                  color: Colors.white54,
+                  fontSize: 12,
+                ),
+                textAlign: TextAlign.center,
+              )
+            else
+              Text(
+                widget.modelUrl,
+                style: const TextStyle(
+                  color: Colors.white54,
+                  fontSize: 12,
+                ),
+                textAlign: TextAlign.center,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildControlButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback? onPressed,
+    bool isPrimary = false,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: isPrimary ? Colors.blue.withOpacity(0.8) : Colors.black.withOpacity(0.7),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: isPrimary ? Colors.blue : Colors.white.withOpacity(0.2),
+          width: 1,
+        ),
+      ),
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                color: onPressed != null ? Colors.white : Colors.grey,
+                size: 18,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  color: onPressed != null ? Colors.white : Colors.grey,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInfoRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white70,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(color: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildModelViewer() {
+    if (isUsdz) {
+      return Container(
+        color: Colors.black,
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(
+                Icons.view_in_ar,
+                color: Colors.blue,
+                size: 64,
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'USDZ Model Ready',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Tap the button below to launch in AR Quick Look.',
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 14,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton.icon(
+                onPressed: _downloadAndLaunchUsdz,
+                icon: const Icon(Icons.view_in_ar),
+                label: const Text('Launch AR Quick Look'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return ModelViewer(
+      backgroundColor: const Color.fromARGB(0xFF, 0x1A, 0x1A, 0x1A),
+      src: widget.modelUrl,
+      alt: "3D Model of ${widget.modelName}",
+      ar: false,
+      autoRotate: true,
+      cameraControls: true,
+      disableZoom: false,
+      loading: Loading.eager,
+      onWebViewCreated: (controller) {
+        print('ModelViewer WebView created');
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    if (localFilePath != null && !widget.modelUrl.startsWith('file://')) {
+      File(localFilePath!).delete().catchError((e) => print('Failed to delete temp file: $e'));
+    }
+    super.dispose();
   }
 
   @override
@@ -428,120 +493,29 @@ class _ModelViewerScreenState extends State<ModelViewerScreen> {
           ),
         ),
         actions: [
-          if (isUsdz && Platform.isIOS)
+          if (isUsdz)
             IconButton(
               icon: const Icon(Icons.view_in_ar, color: Colors.white),
-              onPressed: _launchUsdzViewer,
-              tooltip: 'Open in AR Viewer',
+              onPressed: _downloadAndLaunchUsdz,
+              tooltip: 'Open in AR Quick Look',
             ),
           IconButton(
             icon: const Icon(Icons.refresh, color: Colors.white),
-            onPressed: () {
-              setState(() {
-                isLoading = true;
-                hasError = false;
-                errorMessage = null;
-              });
-              _loadModelViewer();
-            },
+            onPressed: _resetViewer,
+          ),
+          IconButton(
+            icon: const Icon(Icons.info_outline, color: Colors.white),
+            onPressed: _showModelInfo,
           ),
         ],
       ),
       body: Stack(
         children: [
-          if (!hasError)
-            WebViewWidget(controller: controller),
-          if (hasError)
-            Container(
-              color: Colors.black,
-              child: Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(
-                      Icons.error_outline,
-                      color: Colors.red,
-                      size: 64,
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      isUsdz ? 'USDZ File Detected' : 'Failed to Load Model',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
-                      child: Text(
-                        errorMessage ??
-                            (isUsdz ? 'For the best experience with USDZ files, please use the AR viewer.'
-                                : 'Unknown error occurred'),
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 14,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    if (isUsdz && Platform.isIOS)
-                      ElevatedButton.icon(
-                        onPressed: _launchUsdzViewer,
-                        icon: const Icon(Icons.view_in_ar),
-                        label: const Text('Open in AR Viewer'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blue,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                        ),
-                      ),
-                    const SizedBox(height: 8),
-                    ElevatedButton.icon(
-                      onPressed: () {
-                        setState(() {
-                          isLoading = true;
-                          hasError = false;
-                          errorMessage = null;
-                        });
-                        _loadModelViewer();
-                      },
-                      icon: const Icon(Icons.refresh),
-                      label: const Text('Retry in Web Viewer'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.grey[800],
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          if (isLoading)
-            Container(
-              color: Colors.black.withOpacity(0.8),
-              child: Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const CircularProgressIndicator(
-                      valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      isUsdz ? 'Preparing 3D Viewer...' : 'Loading 3D Model...',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+          if (isModelAccessible && !hasError && !isLoading) _buildModelViewer(),
+          if (isModelAccessible && !hasError && !isLoading) _buildModelInfoOverlay(),
+          if (isModelAccessible && !hasError && !isLoading) _buildControlButtons(),
+          if (hasError) _buildErrorState(),
+          if (isLoading) _buildLoadingState(),
         ],
       ),
     );

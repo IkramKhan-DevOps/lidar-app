@@ -139,14 +139,13 @@ class ScanRepository {
   // Throws:
   // - Exception if deletion fails
   // -----------------------------------------------------------
-  Future<String> deleteScan(int scanId) async {
-    // isToken=true (must be authenticated), noJson=false (default JSON headers)
-    final res = await api.deleteAPI(APIUrl.scanById(scanId), true, false);
-
-    if (res is Map<String, dynamic> && res['detail'] != null) {
-      return res['detail'].toString();
+  Future<bool> deleteScan(int scanId) async {
+    try{
+      await api.deleteAPI(APIUrl.scanDeleteById(scanId), true, false);
+      return true;
+    }catch (e) {
+      return false;
     }
-    return 'Scan deleted successfully';
   }
 
   // -----------------------------------------------------------
@@ -175,4 +174,6 @@ class ScanRepository {
     }
     throw Exception('Unexpected response format for scan upload');
   }
+
+
 }

@@ -2073,33 +2073,33 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         view.addSubview(processButton)
         view.addSubview(statusLabel)
         view.addSubview(loadingIndicator)
-        
+
         sceneView.translatesAutoresizingMaskIntoConstraints = false
         closeButton.translatesAutoresizingMaskIntoConstraints = false
         backButton.translatesAutoresizingMaskIntoConstraints = false
         processButton.translatesAutoresizingMaskIntoConstraints = false
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         loadingIndicator.translatesAutoresizingMaskIntoConstraints = false
-        
+
         closeButton.setImage(UIImage(systemName: "xmark"), for: .normal)
         closeButton.tintColor = .white
         closeButton.backgroundColor = UIColor.black.withAlphaComponent(0.5)
         closeButton.layer.cornerRadius = 20
         closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
-        
+
         backButton.setImage(UIImage(systemName: "chevron.left"), for: .normal)
         backButton.tintColor = .white
         backButton.backgroundColor = UIColor.black.withAlphaComponent(0.5)
         backButton.layer.cornerRadius = 20
         backButton.addTarget(self, action: #selector(backTapped), for: .touchUpInside)
-        
+
         processButton.setTitle("Done", for: .normal)
         processButton.setTitleColor(.white, for: .normal)
         processButton.backgroundColor = UIColor.systemGreen.withAlphaComponent(0.8)
         processButton.layer.cornerRadius = 10
         processButton.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold)
         processButton.addTarget(self, action: #selector(doneButtonTapped), for: .touchUpInside)
-        
+
         statusLabel.text = ""
         statusLabel.textColor = .white
         statusLabel.font = .systemFont(ofSize: 16, weight: .medium)
@@ -2108,36 +2108,37 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         statusLabel.backgroundColor = UIColor.black.withAlphaComponent(0.5)
         statusLabel.layer.cornerRadius = 8
         statusLabel.layer.masksToBounds = true
-        
+
         loadingIndicator.color = .white
         loadingIndicator.hidesWhenStopped = true
-        
+
         NSLayoutConstraint.activate([
             sceneView.topAnchor.constraint(equalTo: view.topAnchor),
             sceneView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             sceneView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             sceneView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            
+
             closeButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 10),
             closeButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -10),
             closeButton.widthAnchor.constraint(equalToConstant: 40),
             closeButton.heightAnchor.constraint(equalToConstant: 40),
-            
+
             backButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 10),
             backButton.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 10),
             backButton.widthAnchor.constraint(equalToConstant: 40),
             backButton.heightAnchor.constraint(equalToConstant: 40),
-            
-        processButton.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20),
-            processButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+
+            // Updated constraints for processButton to place it in the bottom-right corner
+            processButton.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20),
+            processButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16), // Align to right with padding
             processButton.widthAnchor.constraint(equalToConstant: 120),
             processButton.heightAnchor.constraint(equalToConstant: 50),
-            
+
             statusLabel.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20),
             statusLabel.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
             statusLabel.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
             statusLabel.heightAnchor.constraint(greaterThanOrEqualToConstant: 60),
-            
+
             loadingIndicator.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             loadingIndicator.centerYAnchor.constraint(equalTo: view.centerYAnchor)
         ])

@@ -193,19 +193,28 @@ class SettingsScreen extends ConsumerWidget {
                                 ),
                                 const SizedBox(width: 8),
                                 // Simple "Profile" chip (non-interactive label)
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 10, vertical: 6),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.07),
-                                    borderRadius: BorderRadius.circular(20),
-                                  ),
-                                  child: const Text(
-                                    'Profile',
-                                    style: TextStyle(
-                                      color: Colors.white70,
-                                      fontSize: 11.5,
-                                      fontWeight: FontWeight.w500,
+                                InkWell(
+                                  onTap: (){
+                                    // Placeholder for profile navigation
+                                    Navigator.pushNamed(
+                                      context,
+                                      AppRoutes.profileChangeScreen,
+                                    );
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 10, vertical: 6),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withOpacity(0.07),
+                                      borderRadius: BorderRadius.circular(20),
+                                    ),
+                                    child: const Text(
+                                      'Profile',
+                                      style: TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 11.5,
+                                        fontWeight: FontWeight.w500,
+                                      ),
                                     ),
                                   ),
                                 )

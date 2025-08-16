@@ -161,17 +161,20 @@ class NetworkApiService extends BaseApiService {
   // Adjust if you need to support anonymous deletes or non-JSON cases.
   // Times out after _writeTimeout.
   // -----------------------------------------------------------
+// ... keep previous imports and class declaration
+
   @override
   Future<dynamic> deleteAPI(String url,
       [bool isToken = false, bool noJson = false]) async {
     try {
-      final token = await AuthToken.getToken();
+      final token = isToken ? await AuthToken.getToken() : null;
+      final bool sendJson = !noJson;
 
       final res = await http
           .delete(
-            Uri.parse(url),
-            headers: _headers(token: token),
-          )
+        Uri.parse(url),
+        headers: _headers(token: token, json: sendJson),
+      )
           .timeout(_writeTimeout);
 
       _debug('DELETE', url, res);
@@ -180,6 +183,36 @@ class NetworkApiService extends BaseApiService {
       throw FetchDataException('No internet connection.');
     }
   }
+
+  dynamic _validate(http.Response res) {
+    // Success codes we accept
+    if (res.statusCode == 200 ||
+        res.statusCode == 201 ||
+        res.statusCode == 202 ||
+        res.statusCode == 204) {
+      if (res.body.isEmpty) return {}; // 204 or empty body
+      try {
+        return jsonDecode(res.body);
+      } catch (_) {
+        return res.body;
+      }
+    }
+
+    final body = res.body;
+    switch (res.statusCode) {
+      case 400:
+        throw BadRequestException(body);
+      case 401:
+      case 403:
+        throw UnauthorizedException(body);
+      case 404:
+        throw FetchDataException('404 Not Found: $body');
+      default:
+        throw FetchDataException('Status ${res.statusCode}: $body');
+    }
+  }
+
+// ... keep rest of file
 
   // -----------------------------------------------------------
   // _debug
@@ -204,33 +237,4 @@ class NetworkApiService extends BaseApiService {
   //
   // Extend this to support more success codes (e.g., 204) as needed.
   // -----------------------------------------------------------
-  dynamic _validate(http.Response res) {
-    // Treat 200/201 as success
-    if (res.statusCode == 200 || res.statusCode == 201) {
-      if (res.body.isEmpty) return {};
-      try {
-        return jsonDecode(res.body); // Parsed JSON map/list
-      } catch (_) {
-        return res.body; // Not JSON, return raw text
-      }
-    }
-
-    // On error, bubble up server content; repositories/viewmodels can parse it.
-    final body = res.body;
-    switch (res.statusCode) {
-      case 400:
-        // Typically validation errors (bad input)
-        throw BadRequestException(body);
-      case 401:
-      case 403:
-        // Auth/permission problems
-        throw UnauthorizedException(body);
-      case 404:
-        // Resource not found
-        throw FetchDataException('404 Not Found: $body');
-      default:
-        // Other server or client errors
-        throw FetchDataException('Status ${res.statusCode}: $body');
-    }
-  }
 }

@@ -18,6 +18,8 @@ class AuthToken {
   static const _tokenKey = 'auth_token';
 
   // -----------------------------------------------------------
+
+
   // saveToken
   // Saves the token string to local storage.
   //

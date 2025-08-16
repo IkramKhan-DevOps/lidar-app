@@ -161,6 +161,7 @@ class NetworkStatusAppBarIndicator extends ConsumerWidget {
 }
 
 /// Detailed status card for drawer or settings
+/// Detailed status card for drawer or settings
 class NetworkStatusCard extends ConsumerWidget {
   const NetworkStatusCard({super.key});
 
@@ -172,10 +173,11 @@ class NetworkStatusCard extends ConsumerWidget {
       margin: const EdgeInsets.all(16),
       color: Colors.grey[850],
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Row with flexible elements to prevent overflow
             Row(
               children: [
                 Icon(
@@ -183,26 +185,33 @@ class NetworkStatusCard extends ConsumerWidget {
                   color: networkState.isOnline ? Colors.green : Colors.red,
                 ),
                 const SizedBox(width: 8),
-                Text(
-                  'Network Status',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
+                // Use Expanded to allow the text to take available space but not force overflow
+                Expanded(
+                  child: Text(
+                    'Network Status',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
-                const Spacer(),
+                // NetworkStatusIndicator at the end - assuming it's a small widget
                 NetworkStatusIndicator(),
               ],
             ),
             if (networkState.lastSyncMessage != null) ...[
               const SizedBox(height: 8),
+              // Wrap long messages to prevent overflow
               Text(
                 networkState.lastSyncMessage!,
                 style: TextStyle(
                   color: Colors.grey[400],
                   fontSize: 14,
                 ),
+                // Add these properties to handle text overflow gracefully
+                overflow: TextOverflow.ellipsis,
+                maxLines: 2, // Allow up to 2 lines for the message
               ),
             ],
             if (networkState.lastSyncTime != null) ...[
@@ -227,6 +236,7 @@ class NetworkStatusCard extends ConsumerWidget {
                     width: 1,
                   ),
                 ),
+                // Ensure the text can wrap if needed
                 child: Text(
                   '${networkState.pendingScansCount} scans waiting to sync',
                   style: const TextStyle(
@@ -234,6 +244,7 @@ class NetworkStatusCard extends ConsumerWidget {
                     fontSize: 12,
                     fontWeight: FontWeight.w500,
                   ),
+                  overflow: TextOverflow.ellipsis, // Use ellipsis for very long numbers
                 ),
               ),
             ],

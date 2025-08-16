@@ -59,8 +59,35 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   // Toggles password visibility for the password field.
   bool _obscure = true;
 
+  // Listen to text changes to update the button state
+  @override
+  void initState() {
+    super.initState();
+    // Add listeners to both controllers to rebuild on text changes
+    _emailCtl.addListener(_onInputChanged);
+    _pwdCtl.addListener(_onInputChanged);
+  }
+
+  // Simple method to rebuild the UI when input changes
+  void _onInputChanged() {
+    setState(() {
+      // No need to do anything - just trigger rebuild
+    });
+  }
+
+  // FIXED: This method properly uses setState to rebuild UI
+  void _toggleObscure() {
+    setState(() {
+      _obscure = !_obscure;
+    });
+  }
+
   @override
   void dispose() {
+    // Remove listeners before disposing
+    _emailCtl.removeListener(_onInputChanged);
+    _pwdCtl.removeListener(_onInputChanged);
+
     // Prevent memory leaks by disposing controllers.
     _emailCtl.dispose();
     _pwdCtl.dispose();
@@ -92,7 +119,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   // Convenience method to show an error snackbar.
   void _showSnack(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
-
       SnackBar(content: Text(msg), backgroundColor: Colors.red),
     );
   }
@@ -220,12 +246,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   emailCtl: _emailCtl,
                   pwdCtl: _pwdCtl,
                   obscure: _obscure,
-                  toggleObscure: () => setState(() => _obscure = !_obscure),
+                  toggleObscure: _toggleObscure,  // Use the fixed method
                   isLoading: auth.isSubmitting,
                   canSubmit: canSubmit,
                   onSubmit: _onLogin,
                   onSignupTap: _goToSignup,
-                  onForgotPasswordTap: _showForgotPasswordSheet, // NEW
+                  onForgotPasswordTap: _showForgotPasswordSheet,
                 ),
               ],
             ),
@@ -249,7 +275,7 @@ class _LoginCard extends StatelessWidget {
   final bool canSubmit;
   final VoidCallback onSubmit;
   final VoidCallback onSignupTap;
-  final VoidCallback onForgotPasswordTap; // NEW
+  final VoidCallback onForgotPasswordTap;
 
   const _LoginCard({
     super.key,
@@ -321,7 +347,7 @@ class _LoginCard extends StatelessWidget {
               Align(
                 alignment: Alignment.centerRight,
                 child: TextButton(
-                  onPressed: onForgotPasswordTap, // UPDATED
+                  onPressed: onForgotPasswordTap,
                   style: TextButton.styleFrom(
                     foregroundColor: const Color(0xFF60A5FA),
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
@@ -689,9 +715,6 @@ class _Banner extends StatelessWidget {
   }
 }
 
-// Keep _PrimaryGradientButton, _Field, _AppMiniLogo unchanged below...
-// (They are already defined above in your file.)
-
 /* -------------------------------------------------------------------------- */
 /*                           PRIMARY GRADIENT BUTTON                          */
 /* -------------------------------------------------------------------------- */
@@ -780,7 +803,6 @@ class _PrimaryGradientButton extends StatelessWidget {
 /*                                     FIELD                                  */
 /* -------------------------------------------------------------------------- */
 // Labeled text field with glass fill and optional suffix icon.
-// Note: onChanged forces a rebuild to refresh button enabling state.
 class _Field extends StatelessWidget {
   final String label;
   final TextEditingController controller;
@@ -820,7 +842,7 @@ class _Field extends StatelessWidget {
           style: const TextStyle(color: Colors.white, fontSize: 15),
           decoration: InputDecoration(
             hintText: hintText,
-            hintStyle: TextStyle(color: Colors.white54),
+            hintStyle: const TextStyle(color: Colors.white54),
             suffixIcon: suffixIcon,
             filled: true,
             fillColor: Colors.white.withOpacity(0.08),
@@ -837,8 +859,7 @@ class _Field extends StatelessWidget {
               borderSide: const BorderSide(color: Color(0xFF3B82F6), width: 1.4),
             ),
           ),
-          // Simple rebuild to reflect text presence in "canSubmit".
-          onChanged: (_) => (context as Element).markNeedsBuild(),
+          // No need for the markNeedsBuild call - we're using controller listeners instead
         ),
       ],
     );

@@ -1931,7 +1931,7 @@ import GoogleMaps
             os_log("📱 [UPLOAD HANDLER] uploadScan completion called with success: %@", log: OSLog.default, type: .info, success ? "YES" : "NO")
             if success {
                 os_log("✅ [UPLOAD HANDLER] Successfully uploaded scan to backend immediately after completion", log: OSLog.default, type: .info)
-                result("Scan uploaded successfully to backend")
+                result("Scan Saved successfully")
             } else {
                 os_log("⚠️ [UPLOAD HANDLER] Failed to upload scan to backend immediately after completion", log: OSLog.default, type: .error)
                 result(FlutterError(
