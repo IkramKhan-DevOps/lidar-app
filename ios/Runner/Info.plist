@@ -2,8 +2,20 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>NSCameraUsageDescription</key>
+    <string>This app needs access to the camera to display 3D models in augmented reality.</string>
+    <key>UIFileSharingEnabled</key>
+    <string>YES</string>
+    <key>LSSupportsOpeningDocumentsInPlace</key>
+    <string>YES</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+    <string>This app needs access to the camera to display 3D models in augmented reality.</string>
+    <key>UIFileSharingEnabled</key>
+    <string>YES</string>
+    <key>LSSupportsOpeningDocumentsInPlace</key>
+    <string>YES</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>

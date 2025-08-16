@@ -17,10 +17,10 @@ import GoogleMaps
     private var scanCache: [(url: URL, metadata: ScanMetadata?)]?
     private let networkMonitor = NWPathMonitor()
     private var isOnline = false
-    private let apiBaseURL = "http://192.168.1.11:9000/api/v1" // Your API base URL
+    private let apiBaseURL = "http://192.168.1.8:9000/api/v1" // Your API base URL
     // Processing API URL function
     private func processAPIURL(scanId: Int) -> String {
-        return "http://192.168.1.11:9000/api/v1/scans/\(scanId)/process/"
+        return "http://192.168.1.8:9000/api/v1/scans/\(scanId)/process/"
     }
     private var autoSyncEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: "auto_sync_enabled") }
@@ -36,13 +36,15 @@ import GoogleMaps
         return nil
     }
 
-    override func application(
+ override func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
         guard let controller = window?.rootViewController as? FlutterViewController else {
             fatalError("Root view controller must be FlutterViewController")
         }
+        // Register Flutter plugins
+        GeneratedPluginRegistrant.register(with: self)
 
         // Initialize Google Maps SDK
         if let path = Bundle.main.path(forResource: "Info", ofType: "plist"),
@@ -53,143 +55,139 @@ import GoogleMaps
         } else {
             os_log("❌ [GOOGLE MAPS] Failed to find API key in Info.plist", log: OSLog.default, type: .error)
         }
-        
-        GeneratedPluginRegistrant.register(with: self)
 
+        // Set up your existing method channel
         channel = FlutterMethodChannel(
             name: "com.demo.channel/message",
             binaryMessenger: controller.binaryMessenger
         )
 
-   channel?.setMethodCallHandler { [weak self] call, result in
-       guard let self = self else {
-           result(FlutterError(
-               code: "INSTANCE_DEALLOCATED",
-               message: "AppDelegate was deallocated.",
-               details: nil
-           ))
-           return
-       }
+        channel?.setMethodCallHandler { [weak self] call, result in
+            guard let self = self else {
+                result(FlutterError(
+                    code: "INSTANCE_DEALLOCATED",
+                    message: "AppDelegate was deallocated.",
+                    details: nil
+                ))
+                return
+            }
 
-       // Add debug logging for all method calls
-       os_log("🔍 [METHOD CHANNEL] Received method call: %@ with arguments: %@", log: OSLog.default, type: .info, call.method, String(describing: call.arguments))
+            // Add debug logging for all method calls
+            os_log("🔍 [METHOD CHANNEL] Received method call: %@ with arguments: %@", log: OSLog.default, type: .info, call.method, String(describing: call.arguments))
 
-        // Add your method call handling logic here
-
-
-        switch call.method {
-        // Non-AR methods that work on all iOS versions
-        case "getSavedScans":
-            self.getSavedScans(result: result)
-        case "deleteScan":
-            self.deleteScan(call: call, result: result)
-        case "getScanImages":
-            self.getScanImages(call: call, result: result)
-        case "updateScanName":
-            self.updateScanName(call: call, result: result)
-        case "updateScanStatus":
-            self.updateScanStatus(call: call, result: result)
-        case "getZipSize":
-            self.getZipSize(call: call, result: result)
-        case "getScanMetadata":
-            self.getScanMetadata(call: call, result: result)
-        case "checkZipFile":
-            self.checkZipFile(call: call, result: result)
-        case "scanComplete":
-            self.handleScanComplete(call: call, result: result)
-        case "uploadScanToBackend":
-            self.handleUploadScanToBackend(call: call, result: result)
-        case "downloadZipFile":
-            self.downloadZipFile(call: call, result: result)
-        case "clearAllLocalData":
-            self.clearAllLocalData(call: call, result: result)
-        case "setAutoSyncEnabled":
-            self.setAutoSyncEnabled(call: call, result: result)
-        case "getAutoSyncEnabled":
-            self.getAutoSyncEnabled(result: result)
-        case "syncInitializedScans":
-            self.syncInitializedScans(result: result)
-        case "processModelOnServer":
-            self.processModelOnServer(call: call, result: result)
-        // AR and iOS version-specific methods
-        case "startScan":
-            if #available(iOS 13.4, *) {
-                self.startLiDARScan(result: result)
-            } else {
-                result(FlutterError(
-                    code: "UNSUPPORTED_IOS_VERSION",
-                    message: "LiDAR scanning requires iOS 13.4 or later.",
-                    details: nil
-                ))
+            // Add your method call handling logic here
+            switch call.method {
+            // Non-AR methods that work on all iOS versions
+            case "getSavedScans":
+                self.getSavedScans(result: result)
+            case "deleteScan":
+                self.deleteScan(call: call, result: result)
+            case "getScanImages":
+                self.getScanImages(call: call, result: result)
+            case "updateScanName":
+                self.updateScanName(call: call, result: result)
+            case "updateScanStatus":
+                self.updateScanStatus(call: call, result: result)
+            case "getZipSize":
+                self.getZipSize(call: call, result: result)
+            case "getScanMetadata":
+                self.getScanMetadata(call: call, result: result)
+            case "checkZipFile":
+                self.checkZipFile(call: call, result: result)
+            case "scanComplete":
+                self.handleScanComplete(call: call, result: result)
+            case "uploadScanToBackend":
+                self.handleUploadScanToBackend(call: call, result: result)
+            case "downloadZipFile":
+                self.downloadZipFile(call: call, result: result)
+            case "clearAllLocalData":
+                self.clearAllLocalData(call: call, result: result)
+            case "setAutoSyncEnabled":
+                self.setAutoSyncEnabled(call: call, result: result)
+            case "getAutoSyncEnabled":
+                self.getAutoSyncEnabled(result: result)
+            case "syncInitializedScans":
+                self.syncInitializedScans(result: result)
+            case "processModelOnServer":
+                self.processModelOnServer(call: call, result: result)
+            // AR and iOS version-specific methods
+            case "startScan":
+                if #available(iOS 13.4, *) {
+                    self.startLiDARScan(result: result)
+                } else {
+                    result(FlutterError(
+                        code: "UNSUPPORTED_IOS_VERSION",
+                        message: "LiDAR scanning requires iOS 13.4 or later.",
+                        details: nil
+                    ))
+                }
+            case "openUSDZ":
+                if #available(iOS 13.4, *) {
+                    self.openUSDZ(call: call, result: result)
+                } else {
+                    result(FlutterError(
+                        code: "UNSUPPORTED_IOS_VERSION",
+                        message: "USDZ preview requires iOS 13.4 or later.",
+                        details: nil
+                    ))
+                }
+            case "shareUSDZ":
+                if #available(iOS 13.4, *) {
+                    self.shareUSDZ(call: call, result: result)
+                } else {
+                    result(FlutterError(
+                        code: "UNSUPPORTED_IOS_VERSION",
+                        message: "USDZ sharing requires iOS 13.4 or later.",
+                        details: nil
+                    ))
+                }
+            case "closeARModule":
+                if #available(iOS 13.4, *) {
+                    self.handleCloseARModule(result: result)
+                } else {
+                    result(FlutterError(
+                        code: "UNSUPPORTED_IOS_VERSION",
+                        message: "AR module requires iOS 13.4 or later.",
+                        details: nil
+                    ))
+                }
+            case "openFolder":
+                if #available(iOS 14.0, *) {
+                    self.openFolder(call: call, result: result)
+                } else {
+                    result(FlutterError(
+                        code: "UNSUPPORTED_IOS_VERSION",
+                        message: "Folder opening requires iOS 14.0 or later.",
+                        details: nil
+                    ))
+                }
+            case "processScan":
+                if #available(iOS 13.4, *) {
+                    self.processScan(call: call, result: result)
+                } else {
+                    result(FlutterError(
+                        code: "UNSUPPORTED_IOS_VERSION",
+                        message: "Scan processing requires iOS 13.4 or later.",
+                        details: nil
+                    ))
+                }
+            case "showUSDZCard":
+                if #available(iOS 13.4, *) {
+                    self.showUSDZCard(call: call, result: result)
+                } else {
+                    result(FlutterError(
+                        code: "UNSUPPORTED_IOS_VERSION",
+                        message: "USDZ card display requires iOS 13.4 or later.",
+                        details: nil
+                    ))
+                }
+            default:
+                result(FlutterMethodNotImplemented)
             }
-        case "openUSDZ":
-            if #available(iOS 13.4, *) {
-                self.openUSDZ(call: call, result: result)
-            } else {
-                result(FlutterError(
-                    code: "UNSUPPORTED_IOS_VERSION",
-                    message: "USDZ preview requires iOS 13.4 or later.",
-                    details: nil
-                ))
-            }
-        case "shareUSDZ":
-            if #available(iOS 13.4, *) {
-                self.shareUSDZ(call: call, result: result)
-            } else {
-                result(FlutterError(
-                    code: "UNSUPPORTED_IOS_VERSION",
-                    message: "USDZ sharing requires iOS 13.4 or later.",
-                    details: nil
-                ))
-            }
-        case "closeARModule":
-            if #available(iOS 13.4, *) {
-                self.handleCloseARModule(result: result)
-            } else {
-                result(FlutterError(
-                    code: "UNSUPPORTED_IOS_VERSION",
-                    message: "AR module requires iOS 13.4 or later.",
-                    details: nil
-                ))
-            }
-        case "openFolder":
-            if #available(iOS 14.0, *) {
-                self.openFolder(call: call, result: result)
-            } else {
-                result(FlutterError(
-                    code: "UNSUPPORTED_IOS_VERSION",
-                    message: "Folder opening requires iOS 14.0 or later.",
-                    details: nil
-                ))
-            }
-        case "processScan":
-            if #available(iOS 13.4, *) {
-                self.processScan(call: call, result: result)
-            } else {
-                result(FlutterError(
-                    code: "UNSUPPORTED_IOS_VERSION",
-                    message: "Scan processing requires iOS 13.4 or later.",
-                    details: nil
-                ))
-            }
-        case "showUSDZCard":
-            if #available(iOS 13.4, *) {
-                self.showUSDZCard(call: call, result: result)
-            } else {
-                result(FlutterError(
-                    code: "UNSUPPORTED_IOS_VERSION",
-                    message: "USDZ card display requires iOS 13.4 or later.",
-                    details: nil
-                ))
-            }
-        default:
-            result(FlutterMethodNotImplemented)
         }
-        }
-
 
         setupNetworkMonitor()
-        
+
         // Add notification observer for upload requests from ScanViewController
         NotificationCenter.default.addObserver(
             self,
@@ -200,7 +198,7 @@ import GoogleMaps
 
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
-    
+
     override func applicationDidReceiveMemoryWarning(_ application: UIApplication) {
         os_log("⚠️ [MEMORY WARNING] Memory warning received - this might affect method channel", log: OSLog.default, type: .error)
         // Clean up any heavy resources
@@ -1312,44 +1310,44 @@ import GoogleMaps
     }
 
     private func openUSDZ(call: FlutterMethodCall, result: @escaping FlutterResult) {
-        guard let args = call.arguments as? [String: Any],
-              let path = args["path"] as? String else {
-            result(FlutterError(
-                code: "INVALID_ARGUMENT",
-                message: "Invalid or missing USDZ path.",
-                details: nil
-            ))
-            return
-        }
+         guard let args = call.arguments as? [String: Any],
+               let path = args["path"] as? String else {
+             result(FlutterError(
+                 code: "INVALID_ARGUMENT",
+                 message: "Invalid or missing USDZ path.",
+                 details: nil
+             ))
+             return
+         }
 
-        let url = URL(fileURLWithPath: path)
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            result(FlutterError(
-                code: "FILE_NOT_FOUND",
-                message: "USDZ file not found at \(url.path)",
-                details: nil
-            ))
-            return
-        }
+         let url = URL(fileURLWithPath: path)
+         guard FileManager.default.fileExists(atPath: url.path) else {
+             result(FlutterError(
+                 code: "FILE_NOT_FOUND",
+                 message: "USDZ file not found at \(url.path)",
+                 details: nil
+             ))
+             return
+         }
 
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self, let controller = self.window?.rootViewController else {
-                result(FlutterError(
-                    code: "CONTROLLER_NOT_FOUND",
-                    message: "Failed to access root view controller.",
-                    details: nil
-                ))
-                return
-            }
+         DispatchQueue.main.async { [weak self] in
+             guard let self = self, let controller = self.window?.rootViewController else {
+                 result(FlutterError(
+                     code: "CONTROLLER_NOT_FOUND",
+                     message: "Failed to access root view controller.",
+                     details: nil
+                 ))
+                 return
+             }
 
-            let previewController = QLPreviewController()
-            previewController.dataSource = self
-            self.currentUSDZURL = url
-            controller.present(previewController, animated: true) {
-                result("USDZ preview opened")
-            }
-        }
-    }
+             let previewController = QLPreviewController()
+             previewController.dataSource = self
+             self.currentUSDZURL = url
+             controller.present(previewController, animated: true) {
+                 result("USDZ preview opened")
+             }
+         }
+     }
 
     private func shareUSDZ(call: FlutterMethodCall, result: @escaping FlutterResult) {
         guard let args = call.arguments as? [String: Any],
