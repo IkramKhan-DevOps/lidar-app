@@ -17,10 +17,10 @@ import GoogleMaps
     private var scanCache: [(url: URL, metadata: ScanMetadata?)]?
     private let networkMonitor = NWPathMonitor()
     private var isOnline = false
-    private let apiBaseURL = "http://192.168.1.20:9000/api/v1" // Your API base URL
+    private let apiBaseURL = "http://213.73.97.120/api/v1" // Your API base URL
     // Processing API URL function
     private func processAPIURL(scanId: Int) -> String {
-        return "http://192.168.1.20:9000/api/v1/scans/\(scanId)/process/"
+        return "http://213.73.97.120/api/v1/scans/\(scanId)/process/"
     }
     private var autoSyncEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: "auto_sync_enabled") }
@@ -524,95 +524,91 @@ import GoogleMaps
         }
     }
 
-    private func handleScanComplete(call: FlutterMethodCall, result: @escaping FlutterResult) {
-        guard let args = call.arguments as? [String: Any],
-              let folderPath = args["folderPath"] as? String else {
-            os_log("❌ [SCAN COMPLETE] Invalid arguments: %@", log: OSLog.default, type: .error, String(describing: call.arguments))
-            result(FlutterError(
-                code: "INVALID_ARGUMENT",
-                message: "Invalid or missing folder path in scanComplete.",
-                details: nil
-            ))
-            return
-        }
 
-        os_log("✅ [SCAN COMPLETE] Starting - Method channel active: %@", log: OSLog.default, type: .info, self.channel != nil ? "YES" : "NO")
-        
-        // Invalidate cache to ensure fresh scan data
-        invalidateScanCache()
-        
-        let folderURL = URL(fileURLWithPath: folderPath)
-        let metaURL = folderURL.appendingPathComponent("metadata.json")
-        let zipURL = folderURL.appendingPathComponent("input_data.zip")
-        let fm = FileManager.default
-        
-        // First, immediately notify Flutter about the scan completion so UI updates
-        DispatchQueue.main.async { [weak self] in
-            self?.channel?.invokeMethod("scanComplete", arguments: args) { invokeResult in
-                if let error = invokeResult as? FlutterError {
-                    os_log("❌ [SCAN COMPLETE] Failed to notify Flutter: %@", log: OSLog.default, type: .error, error.message ?? "Unknown error")
-                } else {
-                    os_log("✅ [SCAN COMPLETE] Flutter notified successfully", log: OSLog.default, type: .info)
-                }
-            }
-        }
-        
-        // Check if scan data is complete for upload
-        if fm.fileExists(atPath: metaURL.path) && fm.fileExists(atPath: zipURL.path) {
-            // Handle based on online/offline status AND auto-sync setting
-            if isOnline && autoSyncEnabled {
-                os_log("🚀 [SCAN COMPLETE] Online + Auto-sync enabled - uploading to server and saving locally: %@", log: OSLog.default, type: .info, folderPath)
-                uploadScan(folderURL: folderURL) { [weak self] success in
-                    if success {
-                        os_log("✅ [SCAN COMPLETE] Successfully uploaded: %@", log: OSLog.default, type: .info, folderPath)
-                        
-                        // Set local status to pending (data saved both in API and locally)
-                        _ = ScanLocalStorage.shared.updateScanStatus("pending", for: folderURL)
-                        
-                        // Notify Flutter about successful upload
-                        DispatchQueue.main.async {
-                            self?.channel?.invokeMethod("scanUploadComplete", arguments: [
-                                "folderPath": folderPath,
-                                "success": true
-                            ])
-                        }
-                    } else {
-                        os_log("❌ [SCAN COMPLETE] Upload failed while online, marking as pending for retry: %@", log: OSLog.default, type: .error, folderPath)
-                        
-                        // Mark as pending for later upload retry (since we had connectivity during scan)
-                        _ = ScanLocalStorage.shared.updateScanStatus("pending", for: folderURL)
-                        
-                        // Notify Flutter about failed upload
-                        DispatchQueue.main.async {
-                            self?.channel?.invokeMethod("scanUploadComplete", arguments: [
-                                "folderPath": folderPath,
-                                "success": false
-                            ])
-                        }
-                    }
-                }
-            } else if isOnline && !autoSyncEnabled {
-                os_log("⏸️ [SCAN COMPLETE] Online but auto-sync disabled - saving locally with initialized status for manual sync: %@", log: OSLog.default, type: .info, folderPath)
-                // When auto-sync is disabled, save with initialized status for manual sync
-                _ = ScanLocalStorage.shared.updateScanStatus("initialized", for: folderURL)
-            } else {
-                os_log("📱 [SCAN COMPLETE] Offline - saving locally with initialized status: %@", log: OSLog.default, type: .info, folderPath)
-                // When offline, save locally with initialized status for later sync
-                _ = ScanLocalStorage.shared.updateScanStatus("initialized", for: folderURL)
-            }
-        } else {
-            os_log("⚠️ [SCAN COMPLETE] Scan data incomplete - missing metadata or zip: %@", log: OSLog.default, type: .error, folderPath)
-            _ = ScanLocalStorage.shared.updateScanStatus("failed", for: folderURL)
-        }
-        
-        // Test method channel connectivity after scan completion
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            self.testMethodChannelConnectivity()
-        }
-        
-        result("Scan complete notification processed")
+private func handleScanComplete(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard let args = call.arguments as? [String: Any],
+          let folderPath = args["folderPath"] as? String else {
+        os_log("❌ [SCAN COMPLETE] Invalid arguments: %@", log: OSLog.default, type: .error, String(describing: call.arguments))
+        result(FlutterError(
+            code: "INVALID_ARGUMENT",
+            message: "Invalid or missing folder path in scanComplete.",
+            details: nil
+        ))
+        return
     }
 
+    os_log("✅ [SCAN COMPLETE] Starting - Method channel active: %@", log: OSLog.default, type: .info, self.channel != nil ? "YES" : "NO")
+
+    // Invalidate cache to ensure fresh scan data
+    invalidateScanCache()
+
+    let folderURL = URL(fileURLWithPath: folderPath)
+    let metaURL = folderURL.appendingPathComponent("metadata.json")
+    let zipURL = folderURL.appendingPathComponent("input_data.zip")
+    let fm = FileManager.default
+
+    // First, immediately notify Flutter about the scan completion so UI updates
+    DispatchQueue.main.async { [weak self] in
+        self?.channel?.invokeMethod("scanComplete", arguments: args) { invokeResult in
+            if let error = invokeResult as? FlutterError {
+                os_log("❌ [SCAN COMPLETE] Failed to notify Flutter: %@", log: OSLog.default, type: .error, error.message ?? "Unknown error")
+            } else {
+                os_log("✅ [SCAN COMPLETE] Flutter notified successfully", log: OSLog.default, type: .info)
+            }
+        }
+    }
+
+    // Check if scan data is complete for upload
+    if fm.fileExists(atPath: metaURL.path) && fm.fileExists(atPath: zipURL.path) {
+        // Handle based on online/offline status
+        if isOnline {
+            os_log("🚀 [SCAN COMPLETE] Device is online - uploading to server and saving locally: %@", log: OSLog.default, type: .info, folderPath)
+            uploadScan(folderURL: folderURL) { [weak self] success in
+                if success {
+                    os_log("✅ [SCAN COMPLETE] Successfully uploaded: %@", log: OSLog.default, type: .info, folderPath)
+
+                    // Set local status to pending (data saved both in API and locally)
+                    _ = ScanLocalStorage.shared.updateScanStatus("pending", for: folderURL)
+
+                    // Notify Flutter about successful upload
+                    DispatchQueue.main.async {
+                        self?.channel?.invokeMethod("scanUploadComplete", arguments: [
+                            "folderPath": folderPath,
+                            "success": true
+                        ])
+                    }
+                } else {
+                    os_log("❌ [SCAN COMPLETE] Upload failed while online, marking as pending for retry: %@", log: OSLog.default, type: .error, folderPath)
+
+                    // Mark as pending for later upload retry
+                    _ = ScanLocalStorage.shared.updateScanStatus("pending", for: folderURL)
+
+                    // Notify Flutter about failed upload
+                    DispatchQueue.main.async {
+                        self?.channel?.invokeMethod("scanUploadComplete", arguments: [
+                            "folderPath": folderPath,
+                            "success": false
+                        ])
+                    }
+                }
+            }
+        } else {
+            os_log("📱 [SCAN COMPLETE] Offline - saving locally with initialized status: %@", log: OSLog.default, type: .info, folderPath)
+            // When offline, save locally with initialized status for later sync
+            _ = ScanLocalStorage.shared.updateScanStatus("initialized", for: folderURL)
+        }
+    } else {
+        os_log("⚠️ [SCAN COMPLETE] Scan data incomplete - missing metadata or zip: %@", log: OSLog.default, type: .error, folderPath)
+        _ = ScanLocalStorage.shared.updateScanStatus("failed", for: folderURL)
+    }
+
+    // Test method channel connectivity after scan completion
+    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+        self.testMethodChannelConnectivity()
+    }
+
+    result("Scan complete notification processed")
+}
     private func showUSDZCard(call: FlutterMethodCall, result: @escaping FlutterResult) {
         guard let args = call.arguments as? [String: Any],
               let path = args["path"] as? String else {
@@ -1973,50 +1969,57 @@ import GoogleMaps
     }
     
     @objc private func handleUploadNotification(_ notification: Notification) {
-        guard let userInfo = notification.userInfo,
-              let folderPath = userInfo["folderPath"] as? String else {
-            os_log("❌ [UPLOAD NOTIFICATION] Invalid notification data", log: OSLog.default, type: .error)
-            return
-        }
-        
-        os_log("🔔 [UPLOAD NOTIFICATION] Received upload request for: %@, online: %@", log: OSLog.default, type: .info, folderPath, isOnline ? "YES" : "NO")
-        
-        let folderURL = URL(fileURLWithPath: folderPath)
-        let metadataURL = folderURL.appendingPathComponent("metadata.json")
-        let zipURL = folderURL.appendingPathComponent("input_data.zip")
+         guard let userInfo = notification.userInfo,
+               let folderPath = userInfo["folderPath"] as? String else {
+             os_log("❌ [UPLOAD NOTIFICATION] Invalid notification data", log: OSLog.default, type: .error)
+             return
+         }
 
-        guard FileManager.default.fileExists(atPath: metadataURL.path) && FileManager.default.fileExists(atPath: zipURL.path) else {
-            os_log("❌ [UPLOAD NOTIFICATION] Required files not found", log: OSLog.default, type: .error)
-            return
-        }
+         os_log("🔔 [UPLOAD NOTIFICATION] Received upload request for: %@, online: %@", log: OSLog.default, type: .info, folderPath, isOnline ? "YES" : "NO")
 
-        // Only upload if we're online AND auto-sync is enabled
-        if isOnline && autoSyncEnabled {
-            // Trigger the full upload flow immediately
-            os_log("🚀 [UPLOAD NOTIFICATION] Online + Auto-sync enabled - starting immediate backend upload for scan: %@", log: OSLog.default, type: .info, folderPath)
-            
-            self.uploadScan(folderURL: folderURL) { success in
-                if success {
-                    os_log("✅ [UPLOAD NOTIFICATION] Successfully uploaded scan to backend immediately after completion", log: OSLog.default, type: .info)
-                    // Keep local data - do not delete after successful upload
-                    // Update status to uploaded but preserve local files
-                    _ = ScanLocalStorage.shared.updateScanStatus("uploaded", for: folderURL)
-                    os_log("📱 [UPLOAD NOTIFICATION] Keeping local scan data after successful upload: %@", log: OSLog.default, type: .info, folderURL.path)
-                } else {
-                    os_log("⚠️ [UPLOAD NOTIFICATION] Failed to upload scan to backend immediately after completion", log: OSLog.default, type: .error)
-                    // Mark as pending for later retry
-                    _ = ScanLocalStorage.shared.updateScanStatus("pending", for: folderURL)
-                }
-            }
-        } else if isOnline && !autoSyncEnabled {
-            os_log("⏸️ [UPLOAD NOTIFICATION] Online but auto-sync disabled - scan will remain with initialized status for manual sync", log: OSLog.default, type: .info)
-            // When auto-sync is disabled, don't upload automatically - keep initialized status for manual sync
-            _ = ScanLocalStorage.shared.updateScanStatus("initialized", for: folderURL)
-        } else {
-            os_log("📱 [UPLOAD NOTIFICATION] Offline - ignoring upload request, scan will remain with initialized status", log: OSLog.default, type: .info)
-            // When offline, we don't attempt upload - the scan should already have initialized status from handleScanComplete
-        }
-    }
+         let folderURL = URL(fileURLWithPath: folderPath)
+         let metadataURL = folderURL.appendingPathComponent("metadata.json")
+         let zipURL = folderURL.appendingPathComponent("input_data.zip")
+
+         guard FileManager.default.fileExists(atPath: metadataURL.path) && FileManager.default.fileExists(atPath: zipURL.path) else {
+             os_log("❌ [UPLOAD NOTIFICATION] Required files not found", log: OSLog.default, type: .error)
+             return
+         }
+
+         // Handle based on online/offline status
+         if isOnline {
+             os_log("🚀 [UPLOAD NOTIFICATION] Device is online - uploading to server and saving locally: %@", log: OSLog.default, type: .info, folderPath)
+             self.uploadScan(folderURL: folderURL) { success in
+                 if success {
+                     os_log("✅ [UPLOAD NOTIFICATION] Successfully uploaded scan to backend: %@", log: OSLog.default, type: .info, folderURL.path)
+                     // Set local status to uploaded (data saved both in API and locally)
+                     _ = ScanLocalStorage.shared.updateScanStatus("uploaded", for: folderURL)
+                     // Notify Flutter about successful upload
+                     DispatchQueue.main.async { [weak self] in
+                         self?.channel?.invokeMethod("scanUploadComplete", arguments: [
+                             "folderPath": folderPath,
+                             "success": true
+                         ])
+                     }
+                 } else {
+                     os_log("⚠️ [UPLOAD NOTIFICATION] Failed to upload scan to backend, marking as pending for retry: %@", log: OSLog.default, type: .error, folderURL.path)
+                     // Mark as pending for later retry
+                     _ = ScanLocalStorage.shared.updateScanStatus("pending", for: folderURL)
+                     // Notify Flutter about failed upload
+                     DispatchQueue.main.async { [weak self] in
+                         self?.channel?.invokeMethod("scanUploadComplete", arguments: [
+                             "folderPath": folderPath,
+                             "success": false
+                         ])
+                     }
+                 }
+             }
+         } else {
+             os_log("📱 [UPLOAD NOTIFICATION] Offline - ignoring upload request, scan will remain with initialized status", log: OSLog.default, type: .info)
+             // When offline, maintain initialized status
+             _ = ScanLocalStorage.shared.updateScanStatus("initialized", for: folderURL)
+         }
+     }
     
     // MARK: - Local Data Management
     
