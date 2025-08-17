@@ -902,12 +902,12 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
                     // Step 3: Upload GPS points (if any)
                     self.uploadGPSPoints(scanId: sid, metadataData: metadataData) { _ in
                         // Step 4: Upload images (if any)
-                        self.uploadScanImages(scanId: sid, folderURL: folderURL) { _ in
+//                        self.uploadScanImages(scanId: sid, folderURL: folderURL) { _ in
                             // Step 5: Post upload status - uploaded scans should be pending for processing
                             self.postUploadStatus(scanId: sid, status: "pending", errorMessage: nil) { _ in
                                 completion(true)
                             }
-                        }
+//                        }
                     }
                 }.resume()
             }.resume()
