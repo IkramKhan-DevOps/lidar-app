@@ -225,8 +225,7 @@ class _ModelViewerScreenState extends State<ModelViewerScreen> {
                 style: const TextStyle(color: Colors.white70),
               ),
               Text(
-                'Downloaded: $formattedTime',
-                style: const TextStyle(color: Colors.white70),
+                'Downloaded'
               ),
             ],
           ),
@@ -260,7 +259,7 @@ class _ModelViewerScreenState extends State<ModelViewerScreen> {
                 ),
                 const SizedBox(height: 12),
                 const Text(
-                  'The model will be downloaded in approx 1-5 minutes\nRequired for AR viewing',
+                  'The model will be downloaded in approx 0.5 - 5 minutes\nRequired for AR viewing',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.white70),
                 ),

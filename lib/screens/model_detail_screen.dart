@@ -395,8 +395,27 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
         throw PlatformException(code: 'INVALID_SCAN_ID', message: 'Scan ID is required for server processing');
       }
 
+      // First update: Show we're getting file size
       setState(() {
-        _statusMessage = 'Sending processing request to server...';
+        _statusMessage = 'Calculating file size...';
+      });
+
+      // Get the file size (either from API data or local metadata)
+      double fileSizeMB;
+      if (_apiScanDetail?.dataSizeMb != null) {
+        fileSizeMB = _apiScanDetail!.dataSizeMb;
+      } else {
+        final modelSizeBytes = widget.scan['metadata']['model_size_bytes'] ?? 0;
+        fileSizeMB = (modelSizeBytes / (1024 * 1024));
+      }
+
+      // Estimate processing time (adjust these factors based on your server's actual performance)
+      // Example: Assume server can process 50MB in 2 minutes
+      final estimatedMinutes = (fileSizeMB / 50.0) * 2.0;
+      final estimatedTimeText = estimatedMinutes.toStringAsFixed(1);
+
+      setState(() {
+        _statusMessage = 'Sending processing request to server...\nEstimated processing time: ~$estimatedTimeText minutes';
       });
 
       final result = await platform.invokeMethod('processModelOnServer', {
@@ -442,7 +461,7 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       setState(() {
         _isProcessing = false;
         _status = 'failed';
-        _statusMessage = 'Server processing failed: $errorMessage Tap to retry.';
+        _statusMessage = 'Server processing failed: Tap to retry.';
         _errorDetails = e.message;
         widget.scan['metadata']['status'] = 'failed';
       });
@@ -460,7 +479,6 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       }
     }
   }
-
   Future<void> _processModelLocally() async {
     setState(() {
       _isProcessing = true;
@@ -1135,7 +1153,6 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
 
     // For pending API scans
     if (isApiScan && status == 'pending') {
-      print("Is API Scan and Process is Pending");
       return GestureDetector(
         onTap: _previewUSDZ,
         child: Container(
