@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,20 +12,40 @@ import '../widgets/sync_manager.dart';
 import '../settings/providers/global_provider.dart';
 import '../providers/sync_provider.dart';
 
-// Define the AsyncNotifier for managing scans
-final scansProvider = AsyncNotifierProvider<ScansNotifier, List<Map<String, dynamic>>>(() {
-  return ScansNotifier();
-});
-
-class ScansNotifier extends AsyncNotifier<List<Map<String, dynamic>>> {
-  static const platform = MethodChannel('com.demo.channel/message');
+class DashboardScreen extends ConsumerStatefulWidget {
+  const DashboardScreen({super.key});
 
   @override
-  Future<List<Map<String, dynamic>>> build() async {
-    return _fetchScans();
+  ConsumerState<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends ConsumerState<DashboardScreen> {
+  static const platform = MethodChannel('com.demo.channel/message');
+  List<Map<String, dynamic>> scans = [];
+  String currentView = 'list';
+  GoogleMapController? _mapController;
+  bool _isFullScreenMap = false;
+  Timer? _refreshTimer;
+  bool _isRefreshing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchScans();
+    platform.setMethodCallHandler(_handleMethodCall);
   }
 
-  Future<List<Map<String, dynamic>>> _fetchScans() async {
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    _mapController?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _fetchScans() async {
+    setState(() {
+      _isRefreshing = true;
+    });
     try {
       final result = await platform.invokeMethod('getSavedScans');
       final newScans = (result['scans'] as List<dynamic>).map((scan) {
@@ -65,7 +86,7 @@ class ScansNotifier extends AsyncNotifier<List<Map<String, dynamic>>> {
           'image_count': scanMap['imageCount'] ?? 0,
           'model_size_bytes': modelSizeBytes,
           'status': normalizedStatus,
-          'original_status': scanMap['originalStatus'] ?? scanMap['status'],
+          'original_status': scanMap['originalStatus'] ?? scanMap['status'], // Keep original for debugging
           'snapshot_path': scanMap['snapshotPath'],
           'is_from_api': scanMap['isFromAPI'] ?? false,
         };
@@ -80,53 +101,28 @@ class ScansNotifier extends AsyncNotifier<List<Map<String, dynamic>>> {
           'snapshotPath': scanMap['snapshotPath'] != null && scanMap['folderPath'] != null ? '${scanMap['folderPath']}/${scanMap['snapshotPath']}' : null,
         };
       }).toList();
+      setState(() {
+        scans = newScans;
+        _isRefreshing = false;
+      });
       print('Fetched ${newScans.length} scans');
-      return newScans;
     } on PlatformException catch (e) {
       print('Error fetching scans: ${e.message}');
-      throw Exception('Couldn\'t load scans: ${e.message}');
+      setState(() {
+        _isRefreshing = false;
+      });
+      _showSnack('Couldn\'t load scans. Please try again.', isError: true);
     }
   }
 
-  Future<void> refresh() async {
-    state = const AsyncValue.loading();
-    state = await AsyncValue.guard(_fetchScans);
-  }
-}
-
-class DashboardScreen extends ConsumerStatefulWidget {
-  const DashboardScreen({super.key});
-
-  @override
-  ConsumerState<DashboardScreen> createState() => _DashboardScreenState();
-}
-
-class _DashboardScreenState extends ConsumerState<DashboardScreen> {
-  static const platform = MethodChannel('com.demo.channel/message');
-  String currentView = 'list';
-  GoogleMapController? _mapController;
-  bool _isFullScreenMap = false;
-
-  @override
-  void initState() {
-    super.initState();
-    platform.setMethodCallHandler(_handleMethodCall);
-  }
-
-  @override
-  void dispose() {
-    _mapController?.dispose();
-    super.dispose();
-  }
-
   Future<void> _handleMethodCall(MethodCall call) async {
-    final scansNotifier = ref.read(scansProvider.notifier);
     switch (call.method) {
       case 'scanComplete':
       case 'processingComplete':
         try {
           print('Received ${call.method} with arguments: ${call.arguments}');
-          await scansNotifier.refresh();
+          await _fetchScans();
+          // Show success message for new scans
           if (call.method == 'scanComplete') {
             final folderPath = call.arguments?['folderPath'] as String?;
             final scanName = folderPath?.split('/').last ?? 'New scan';
@@ -151,7 +147,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             networkNotifier.setSyncComplete(false, message: 'Some scans failed to sync');
           }
 
-          await scansNotifier.refresh();
+          // Refresh scan list to show updated statuses
+          await _fetchScans();
         } catch (e) {
           print('Error handling offlineSyncComplete: $e');
           final networkNotifier = ref.read(networkStateProvider.notifier);
@@ -189,7 +186,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             _showSnack('⚠️ $scanName failed to upload. Will retry when online.', isError: true);
           }
 
-          await scansNotifier.refresh();
+          // Refresh scan list to show updated statuses
+          await _fetchScans();
         } catch (e) {
           print('Error handling scanUploadComplete: $e');
         }
@@ -222,13 +220,16 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       DateTime dateTime;
 
       if (timestamp is String) {
+        // Handle ISO string format
         dateTime = DateTime.parse(timestamp);
       } else if (timestamp is num) {
+        // Handle Unix timestamp (seconds since epoch)
         dateTime = DateTime.fromMillisecondsSinceEpoch((timestamp * 1000).round());
       } else {
         return null;
       }
 
+      // Format as YYYY-MM-DD
       return '${dateTime.year}-${dateTime.month.toString().padLeft(2, '0')}-${dateTime.day.toString().padLeft(2, '0')}';
     } catch (e) {
       print('Error formatting timestamp: $e');
@@ -259,7 +260,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     );
   }
 
-  Map<String, dynamic> _getAllCoordinatesByScan(List<Map<String, dynamic>> scans) {
+  Map<String, dynamic> _getAllCoordinatesByScan() {
     Map<String, List<LatLng>> scanCoordinates = {};
     List<LatLng> allPoints = [];
 
@@ -325,8 +326,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     };
   }
 
-  Widget _buildMapView({bool isFullScreen = false, required List<Map<String, dynamic>> scans}) {
-    final coordinatesData = _getAllCoordinatesByScan(scans);
+  Widget _buildMapView({bool isFullScreen = false}) {
+    final coordinatesData = _getAllCoordinatesByScan();
     final scanCoordinates = coordinatesData['scanCoordinates'] as Map<String, List<LatLng>>;
     final allPoints = coordinatesData['allPoints'] as List<LatLng>;
     final defaultPosition = const LatLng(0.0, 0.0);
@@ -434,8 +435,6 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final scansAsync = ref.watch(scansProvider);
-
     return Scaffold(
       backgroundColor: Colors.grey[900],
       appBar: AppBar(
@@ -501,12 +500,13 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                 onTap: () => Navigator.of(context).pop(),
               ),
               const Divider(color: Colors.grey),
+              // Network status card in drawer
               const NetworkStatusCard(),
               const Spacer(),
               Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Text(
-                  'Total scans: ${scansAsync.valueOrNull?.length ?? 0}',
+                  'Total scans: ${scans.length}',
                   style: TextStyle(
                     color: Colors.grey[400],
                     fontSize: 12,
@@ -520,92 +520,48 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       body: Stack(
         children: [
           currentView == 'list' || currentView == 'grid'
-              ? scansAsync.when(
-            data: (scans) => scans.isEmpty
-                ? const Center(child: Text('No scans available', style: TextStyle(color: Colors.white54, fontSize: 14)))
-                : RefreshIndicator(
-              onRefresh: () => ref.read(scansProvider.notifier).refresh(),
-              color: Colors.white,
-              backgroundColor: Colors.black87,
-              child: Stack(
-                children: [
-                  ListView.builder(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: scans.length,
-                    itemBuilder: (context, index) {
-                      final scan = scans[index];
-                      final status = scan['status'] ?? 'pending';
+              ? (scans.isEmpty
+              ? const Center(child: Text('No scans available', style: TextStyle(color: Colors.white54, fontSize: 14)))
+              : RefreshIndicator(
+            onRefresh: _fetchScans,
+            color: Colors.white,
+            backgroundColor: Colors.black87,
+            child: Stack(
+              children: [
+                ListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: scans.length,
+                  itemBuilder: (context, index) {
+                    final scan = scans[index];
+                    final status = scan['status'] ?? 'pending';
 
-                      return ProjectCard(
-                        title: scan['metadata']['name'],
-                        subtitle:
-                        '${_formatTimestamp(scan['timestamp']) ?? 'Unknown'} • ${_safeFormatSize(scan['fileSizeMB'])} MB • Images (${scan['metadata']['image_count']})',
-                        statusLabel: StatusDisplay.getStatusLabel(status),
-                        iconSet: StatusDisplay.getStatusIcons(status),
-                        iconColor: StatusDisplay.getStatusColor(status),
-                        isListView: currentView == 'list',
-                        usdzPath: scan['usdzPath'],
-                        snapshotPath: scan['snapshotPath'],
-                        status: status,
-                        onTap: () => _navigateToModelDetail(scan),
-                        onLongPress: () {},
-                      );
-                    },
-                  ),
-                  if (scansAsync.isLoading)
-                    const Center(
-                      child: CircularProgressIndicator(
-                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                      ),
-                    ),
-                ],
-              ),
+                    return ProjectCard(
+                      title: scan['metadata']['name'],
+                      subtitle:
+                      '${_formatTimestamp(scan['timestamp']) ?? 'Unknown'} • ${_safeFormatSize(scan['fileSizeMB'])} MB • Images (${scan['metadata']['image_count']})',
+                      statusLabel: StatusDisplay.getStatusLabel(status),
+                      iconSet: StatusDisplay.getStatusIcons(status),
+                      iconColor: StatusDisplay.getStatusColor(status),
+                      isListView: currentView == 'list',
+                      usdzPath: scan['usdzPath'],
+                      snapshotPath: scan['snapshotPath'],
+                      status: status,
+                      onTap: () => _navigateToModelDetail(scan),
+                      onLongPress: () {},
+                    );
+                  },
+                ),
+              ],
             ),
-            loading: () => const Center(
-              child: CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-              ),
-            ),
-            error: (error, stack) => Center(
-              child: Text(
-                'Error loading scans: $error',
-                style: const TextStyle(color: Colors.white54, fontSize: 14),
-              ),
-            ),
-          )
-              : scansAsync.when(
-            data: (scans) => _buildMapView(isFullScreen: _isFullScreenMap, scans: scans),
-            loading: () => const Center(
-              child: CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-              ),
-            ),
-            error: (error, stack) => Center(
-              child: Text(
-                'Error loading scans: $error',
-                style: const TextStyle(color: Colors.white54, fontSize: 14),
-              ),
-            ),
-          ),
+          ))
+              : _buildMapView(isFullScreen: _isFullScreenMap),
           if (_isFullScreenMap)
-            scansAsync.when(
-              data: (scans) => _buildMapView(isFullScreen: true, scans: scans),
-              loading: () => const Center(
-                child: CircularProgressIndicator(
-                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                ),
-              ),
-              error: (error, stack) => Center(
-                child: Text(
-                  'Error loading scans: $error',
-                  style: const TextStyle(color: Colors.white54, fontSize: 14),
-                ),
-              ),
-            ),
+            _buildMapView(isFullScreen: true),
         ],
       ),
     );
   }
+
 }
 
 class ProjectCard extends StatelessWidget {

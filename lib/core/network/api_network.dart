@@ -28,8 +28,8 @@ import 'api_urls.dart';
 
 class NetworkApiService extends BaseApiService {
   // Default timeouts per operation type.
-  final Duration _getTimeout = const Duration(seconds: 12);
-  final Duration _writeTimeout = const Duration(seconds: 20);
+final Duration _getTimeout = const Duration(seconds: 1800);
+  final Duration _writeTimeout = const Duration(seconds: 1800);
 
   // -----------------------------------------------------------
   // _headers

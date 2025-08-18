@@ -35,7 +35,7 @@ class AppConfig {
   // Force local SeedsWild base as requested
   static const AppEnv env = AppEnv.prod;
   static String get protocol => 'http';
-  static String get domain => '192.168.1.20:9000';
+  static String get domain => '213.73.97.120';
   static String get root => '$protocol://$domain/';
   static String get api => root;
   static String get v1 => '${root}api/v1/';

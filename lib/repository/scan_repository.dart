@@ -176,4 +176,23 @@ class ScanRepository {
   }
 
 
+
+
+  // Download scan zip file by ID
+Future<bool> downloadScanZip(int scanId) async {
+    try {
+      final res = await api.getAPI(APIUrl.scanDownloadById(scanId), true,);
+      if (res is Map<String, dynamic> && res['success'] == true) {
+        print(">>>>>>>>>>> Scan zip downloaded successfully for scanId: $scanId");
+        // Assuming the response contains a success flag
+        return true;
+      }
+      throw Exception('Failed to download scan zip: unexpected response format');
+    } catch (e) {
+      print(">>>>>>>>>>> EXCEPTION in downloadScanZip: $e");
+      rethrow;
+    }
+  }
+
+
 }

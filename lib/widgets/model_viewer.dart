@@ -1,18 +1,22 @@
-import 'dart:io' show Platform, File;
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:model_viewer_plus/model_viewer_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
+import 'package:permission_handler/permission_handler.dart';
+import 'package:intl/intl.dart';
 
 class ModelViewerScreen extends StatefulWidget {
   final String modelUrl;
   final String modelName;
+  final String scanId;
 
   const ModelViewerScreen({
     super.key,
     required this.modelUrl,
     required this.modelName,
+    required this.scanId,
   });
 
   @override
@@ -24,351 +28,205 @@ class _ModelViewerScreenState extends State<ModelViewerScreen> {
   bool hasError = false;
   String? errorMessage;
   bool isUsdz = false;
-  bool isModelAccessible = false;
   String? localFilePath;
+  double downloadProgress = 0;
+  bool isDownloading = false;
+  int? fileSizeBytes;
+  DateTime? downloadTime;
   static const platform = MethodChannel('com.demo.channel/message');
 
   @override
   void initState() {
     super.initState();
-    print('Model URL: ${widget.modelUrl}');
     isUsdz = widget.modelUrl.toLowerCase().endsWith('.usdz');
-    _checkModelAccessibility();
+    _checkLocalModel();
   }
 
-  Future<void> _checkModelAccessibility() async {
+  Future<void> _checkLocalModel() async {
     setState(() => isLoading = true);
     try {
-      if (widget.modelUrl.startsWith('file://')) {
-        final file = File(widget.modelUrl.replaceFirst('file://', ''));
-        if (await file.exists()) {
-          localFilePath = file.path;
-          setState(() {
-            isModelAccessible = true;
-            isLoading = false;
-          });
-        } else {
-          throw Exception('Local USDZ file not found');
-        }
+      final appDir = await getApplicationDocumentsDirectory();
+      final modelDir = Directory('${appDir.path}/models/${widget.scanId}');
+
+      if (!await modelDir.exists()) {
+        await modelDir.create(recursive: true);
+      }
+
+      final fileName = widget.modelUrl.split('/').last;
+      final localFile = File('${modelDir.path}/$fileName');
+
+      if (await localFile.exists()) {
+        final stat = await localFile.stat();
+        setState(() {
+          localFilePath = localFile.path;
+          fileSizeBytes = stat.size;
+          isLoading = false;
+        });
       } else {
-        final response = await http.head(Uri.parse(widget.modelUrl));
-        if (response.statusCode == 200) {
-          setState(() {
-            isModelAccessible = true;
-            isLoading = false;
-          });
-        } else {
-          throw Exception('HTTP ${response.statusCode}: Unable to access model');
-        }
+        setState(() {
+          isLoading = false;
+        });
       }
     } catch (e) {
-      print('Model accessibility check failed: $e');
+      print('Local model check failed: $e');
       setState(() {
         hasError = true;
         isLoading = false;
-        errorMessage = 'Unable to access model: $e';
+        errorMessage = 'Failed to check local storage: $e';
       });
     }
   }
 
-  Future<void> _downloadAndLaunchUsdz() async {
-    if (!Platform.isIOS) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('USDZ files are only supported on iOS devices'),
-          backgroundColor: Colors.orange,
-        ),
+  Future<void> _downloadModel() async {
+    if (!isUsdz) return;
+
+    setState(() {
+      isDownloading = true;
+      downloadProgress = 0;
+      fileSizeBytes = null;
+      downloadTime = null;
+    });
+
+    try {
+      if (!await _requestStoragePermission()) {
+        throw Exception('Storage permission denied');
+      }
+
+      final appDir = await getApplicationDocumentsDirectory();
+      final modelDir = Directory('${appDir.path}/models/${widget.scanId}');
+
+      if (!await modelDir.exists()) {
+        await modelDir.create(recursive: true);
+      }
+
+      final fileName = widget.modelUrl.split('/').last;
+      final file = File('${modelDir.path}/$fileName');
+
+      final response = await http.Client().send(
+          http.Request('GET', Uri.parse(widget.modelUrl))
       );
-      return;
+
+      final contentLength = response.contentLength ?? 0;
+      final bytes = <int>[];
+
+      await for (var chunk in response.stream) {
+        bytes.addAll(chunk);
+        setState(() {
+          downloadProgress = bytes.length / contentLength;
+        });
+      }
+
+      await file.writeAsBytes(bytes);
+      final stat = await file.stat();
+
+      setState(() {
+        localFilePath = file.path;
+        fileSizeBytes = stat.size;
+        downloadTime = DateTime.now();
+        isDownloading = false;
+      });
+
+    } catch (e) {
+      print('Model download failed: $e');
+      setState(() {
+        isDownloading = false;
+        hasError = true;
+        errorMessage = 'Download failed: $e';
+      });
     }
+  }
+
+  Future<bool> _requestStoragePermission() async {
+    if (Platform.isAndroid) {
+      final status = await Permission.storage.request();
+      return status.isGranted;
+    }
+    return true;
+  }
+
+  Future<void> _launchARViewer() async {
+    if (!Platform.isIOS || localFilePath == null) return;
 
     setState(() => isLoading = true);
 
     try {
-      if (localFilePath == null && !widget.modelUrl.startsWith('file://')) {
-        final response = await http.get(Uri.parse(widget.modelUrl));
-        if (response.statusCode == 200) {
-          final documentsDir = await getApplicationDocumentsDirectory();
-          final fileName = widget.modelUrl.split('/').last;
-          final file = File('${documentsDir.path}/$fileName');
-          await file.writeAsBytes(response.bodyBytes);
-          localFilePath = file.path;
-          print('USDZ file downloaded to: $localFilePath');
-        } else {
-          throw Exception('Failed to download USDZ file: HTTP ${response.statusCode}');
-        }
-      } else if (widget.modelUrl.startsWith('file://')) {
-        localFilePath = widget.modelUrl.replaceFirst('file://', '');
-      }
-
       await platform.invokeMethod('openUSDZ', {'path': localFilePath});
-      setState(() => isLoading = false);
     } catch (e) {
-      print('USDZ handling error: $e');
+      print('AR launch failed: $e');
       setState(() {
-        isLoading = false;
         hasError = true;
-        errorMessage = 'Failed to open AR viewer: $e';
+        errorMessage = 'Failed to launch AR: $e';
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to open AR viewer: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+    } finally {
+      setState(() => isLoading = false);
     }
   }
 
-  void _resetViewer() {
-    setState(() {
-      isLoading = true;
-      hasError = false;
-      errorMessage = null;
-      isModelAccessible = false;
-      localFilePath = null;
-    });
-    _checkModelAccessibility();
-  }
+  Future<void> _deleteLocalModel() async {
+    if (localFilePath == null) return;
 
-  void _showModelInfo() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.grey[900],
-        title: const Text(
-          'Model Information',
-          style: TextStyle(color: Colors.white),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildInfoRow('Name:', widget.modelName),
-            _buildInfoRow('URL:', widget.modelUrl),
-            _buildInfoRow('Format:', isUsdz ? 'USDZ' : 'Other'),
-            _buildInfoRow('Platform:', Platform.operatingSystem),
-            _buildInfoRow('Accessible:', isModelAccessible ? 'Yes' : 'No'),
-            if (localFilePath != null) _buildInfoRow('Local Path:', localFilePath!),
-            _buildInfoRow('Direct AR Launch:', Platform.isIOS && isUsdz ? 'Supported' : 'Not Available'),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close', style: TextStyle(color: Colors.blue)),
-          ),
-        ],
-      ),
-    );
-  }
+    setState(() => isLoading = true);
 
-  Widget _buildModelInfoOverlay() {
-    return Positioned(
-      top: 20,
-      left: 20,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.7),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: Colors.white.withOpacity(0.2),
-            width: 1,
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              widget.modelName,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 14,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              isUsdz ? 'USDZ Model' : '3D Model',
-              style: TextStyle(
-                color: Colors.white.withOpacity(0.7),
-                fontSize: 12,
-              ),
-            ),
-            if (localFilePath != null)
-              Text(
-                'Ready for AR Quick Look',
-                style: TextStyle(
-                  color: Colors.green.withOpacity(0.7),
-                  fontSize: 10,
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildControlButtons() {
-    return Positioned(
-      bottom: 20,
-      left: 0,
-      right: 0,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          _buildControlButton(
-            icon: Icons.refresh,
-            label: 'Reset',
-            onPressed: _resetViewer,
-          ),
-          const SizedBox(width: 12),
-          if (isUsdz)
-            _buildControlButton(
-              icon: Icons.view_in_ar,
-              label: Platform.isIOS ? 'AR Quick Look' : 'AR (iOS Only)',
-              onPressed: Platform.isIOS ? _downloadAndLaunchUsdz : null,
-              isPrimary: Platform.isIOS,
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildErrorState() {
-    if (isUsdz && isModelAccessible && !hasError) {
-      return const SizedBox.shrink();
+    try {
+      final file = File(localFilePath!);
+      if (await file.exists()) {
+        await file.delete();
+      }
+      setState(() {
+        localFilePath = null;
+        fileSizeBytes = null;
+        downloadTime = null;
+      });
+    } catch (e) {
+      print('Failed to delete model: $e');
+      setState(() {
+        hasError = true;
+        errorMessage = 'Failed to delete model: $e';
+      });
+    } finally {
+      setState(() => isLoading = false);
     }
-
-    return Container(
-      color: Colors.black,
-      child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              hasError ? Icons.error_outline : Icons.view_in_ar,
-              color: hasError ? Colors.red : Colors.blue,
-              size: 64,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              hasError ? 'Failed to Load Model' : 'Model Loading Error',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Text(
-                errorMessage ?? 'Unknown error occurred',
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 14,
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ),
-            const SizedBox(height: 24),
-            ElevatedButton.icon(
-              onPressed: _resetViewer,
-              icon: const Icon(Icons.refresh),
-              label: const Text('Retry'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.grey[800],
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
-  Widget _buildLoadingState() {
-    return Container(
-      color: Colors.black.withOpacity(0.8),
-      child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const CircularProgressIndicator(
-              valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              isUsdz ? 'Preparing for AR Quick Look...' : 'Checking model accessibility...',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-              ),
-            ),
-            const SizedBox(height: 8),
-            if (isUsdz)
-              const Text(
-                'Downloading and setting up direct AR launch...',
-                style: TextStyle(
-                  color: Colors.white54,
-                  fontSize: 12,
-                ),
-                textAlign: TextAlign.center,
-              )
-            else
-              Text(
-                widget.modelUrl,
-                style: const TextStyle(
-                  color: Colors.white54,
-                  fontSize: 12,
-                ),
-                textAlign: TextAlign.center,
-              ),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget _buildDownloadInfoCard() {
+    if (localFilePath == null || fileSizeBytes == null) return const SizedBox();
 
-  Widget _buildControlButton({
-    required IconData icon,
-    required String label,
-    required VoidCallback? onPressed,
-    bool isPrimary = false,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: isPrimary ? Colors.blue.withOpacity(0.8) : Colors.black.withOpacity(0.7),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: isPrimary ? Colors.blue : Colors.white.withOpacity(0.2),
-          width: 1,
+    final fileSizeMB = (fileSizeBytes! / (1024 * 1024)).toStringAsFixed(2);
+    final formattedTime = downloadTime != null
+        ? DateFormat('MMM dd, yyyy - hh:mm a').format(downloadTime!)
+        : 'Unknown';
+
+    return Positioned(
+      top: 16,
+      right: 16,
+      child: Card(
+        color: Colors.black.withOpacity(0.7),
+        elevation: 4,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: Colors.blue.shade700, width: 1),
         ),
-      ),
-      child: InkWell(
-        onTap: onPressed,
-        borderRadius: BorderRadius.circular(8),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(
-                icon,
-                color: onPressed != null ? Colors.white : Colors.grey,
-                size: 18,
-              ),
-              const SizedBox(width: 6),
               Text(
-                label,
+                'Model Info',
                 style: TextStyle(
-                  color: onPressed != null ? Colors.white : Colors.grey,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
+                  color: Colors.blue.shade300,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
                 ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Size: $fileSizeMB MB',
+                style: const TextStyle(color: Colors.white70),
+              ),
+              Text(
+                'Downloaded: $formattedTime',
+                style: const TextStyle(color: Colors.white70),
               ),
             ],
           ),
@@ -377,76 +235,151 @@ class _ModelViewerScreenState extends State<ModelViewerScreen> {
     );
   }
 
-  Widget _buildInfoRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: const TextStyle(
-              color: Colors.white70,
-              fontWeight: FontWeight.bold,
+  Widget _buildDownloadButton() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Card(
+          color: Colors.black.withOpacity(0.7),
+          elevation: 4,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: Colors.blue.shade700, width: 1),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                const Text(
+                  'Download Required',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'The model will be downloaded in approx 1-5 minutes\nRequired for AR viewing',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white70),
+                ),
+                const SizedBox(height: 16),
+                ElevatedButton.icon(
+                  onPressed: isDownloading ? null : _downloadModel,
+                  icon: const Icon(Icons.download),
+                  label: const Text('Download Model'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 24, vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              value,
-              style: const TextStyle(color: Colors.white),
+        ),
+        if (isDownloading) ...[
+          const SizedBox(height: 16),
+          SizedBox(
+            width: MediaQuery.of(context).size.width * 0.7,
+            child: LinearProgressIndicator(
+              value: downloadProgress,
+              backgroundColor: Colors.grey[800],
+              valueColor: const AlwaysStoppedAnimation<Color>(Colors.blue),
+              minHeight: 8,
+              borderRadius: BorderRadius.circular(4),
             ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '${(downloadProgress * 100).toStringAsFixed(1)}%',
+            style: const TextStyle(color: Colors.white),
           ),
         ],
-      ),
+      ],
+    );
+  }
+
+  Widget _buildARControls() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ElevatedButton.icon(
+          onPressed: _launchARViewer,
+          icon: const Icon(Icons.view_in_ar),
+          label: const Text('Launch AR Quick Look'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.green,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        TextButton.icon(
+          onPressed: _deleteLocalModel,
+          icon: const Icon(Icons.delete, color: Colors.red),
+          label: const Text(
+            'Delete Local Copy',
+            style: TextStyle(color: Colors.red),
+          ),
+        ),
+      ],
     );
   }
 
   Widget _buildModelViewer() {
     if (isUsdz) {
-      return Container(
-        color: Colors.black,
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(
-                Icons.view_in_ar,
-                color: Colors.blue,
-                size: 64,
+      return Stack(
+        children: [
+          Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.black,
+                  Colors.black,
+                ],
               ),
-              const SizedBox(height: 16),
-              const Text(
-                'USDZ Model Ready',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
+            ),
+            child: Center(
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(
+                      Icons.view_in_ar,
+                      color: Colors.blue,
+                      size: 80,
+                    ),
+                    const SizedBox(height: 20),
+                    Text(
+                      widget.modelName,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 30),
+                    if (localFilePath != null) _buildARControls(),
+                    if (localFilePath == null) _buildDownloadButton(),
+                    const SizedBox(height: 40),
+                  ],
                 ),
               ),
-              const SizedBox(height: 8),
-              const Text(
-                'Tap the button below to launch in AR Quick Look.',
-                style: TextStyle(
-                  color: Colors.white70,
-                  fontSize: 14,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 24),
-              ElevatedButton.icon(
-                onPressed: _downloadAndLaunchUsdz,
-                icon: const Icon(Icons.view_in_ar),
-                label: const Text('Launch AR Quick Look'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blue,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                ),
-              ),
-            ],
+            ),
           ),
-        ),
+          _buildDownloadInfoCard(),
+        ],
       );
     }
 
@@ -457,20 +390,7 @@ class _ModelViewerScreenState extends State<ModelViewerScreen> {
       ar: false,
       autoRotate: true,
       cameraControls: true,
-      disableZoom: false,
-      loading: Loading.eager,
-      onWebViewCreated: (controller) {
-        print('ModelViewer WebView created');
-      },
     );
-  }
-
-  @override
-  void dispose() {
-    if (localFilePath != null && !widget.modelUrl.startsWith('file://')) {
-      File(localFilePath!).delete().catchError((e) => print('Failed to delete temp file: $e'));
-    }
-    super.dispose();
   }
 
   @override
@@ -479,43 +399,43 @@ class _ModelViewerScreenState extends State<ModelViewerScreen> {
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.black,
-        elevation: 0,
+        title: Text(widget.modelName),
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios, color: Colors.white),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        title: Text(
-          widget.modelName,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 18,
-            fontWeight: FontWeight.w600,
-          ),
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.pop(context),
         ),
         actions: [
-          if (isUsdz)
+          if (localFilePath != null)
             IconButton(
-              icon: const Icon(Icons.view_in_ar, color: Colors.white),
-              onPressed: _downloadAndLaunchUsdz,
-              tooltip: 'Open in AR Quick Look',
+              icon: const Icon(Icons.delete, color: Colors.red),
+              onPressed: _deleteLocalModel,
+              tooltip: 'Delete Model',
             ),
-          IconButton(
-            icon: const Icon(Icons.refresh, color: Colors.white),
-            onPressed: _resetViewer,
-          ),
-          IconButton(
-            icon: const Icon(Icons.info_outline, color: Colors.white),
-            onPressed: _showModelInfo,
-          ),
         ],
       ),
       body: Stack(
         children: [
-          if (isModelAccessible && !hasError && !isLoading) _buildModelViewer(),
-          if (isModelAccessible && !hasError && !isLoading) _buildModelInfoOverlay(),
-          if (isModelAccessible && !hasError && !isLoading) _buildControlButtons(),
-          if (hasError) _buildErrorState(),
-          if (isLoading) _buildLoadingState(),
+          if (!isLoading && !hasError) _buildModelViewer(),
+          if (isLoading) const Center(child: CircularProgressIndicator()),
+          if (hasError)
+            Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.error, color: Colors.red, size: 48),
+                  const SizedBox(height: 16),
+                  Text(
+                    errorMessage ?? 'Error loading model',
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: _checkLocalModel,
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
+            ),
         ],
       ),
     );

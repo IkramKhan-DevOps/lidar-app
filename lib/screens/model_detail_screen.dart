@@ -550,9 +550,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
             );
 
             if (isDeleted == true) {
-              ref.invalidate(scansProvider);
+
             }else{
-              ref.invalidate(scansProvider);
             }
 
         } else {
@@ -1046,7 +1045,7 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
     final processedModelUrl = _apiScanDetail?.pointCloud?.processedModel;
     final hasProcessedModel = processedModelUrl != null && processedModelUrl.isNotEmpty;
     if (isApiScan && status == 'completed' && hasProcessedModel) {
-      print("Completed Model With 3D View");
+      final scanId = widget.scan['metadata']['id'].toString(); // Convert int to String
       return Container(
         height: 250,
         margin: const EdgeInsets.symmetric(vertical: 10),
@@ -1057,6 +1056,7 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
                 builder: (context) => ModelViewerScreen(
                   modelUrl: processedModelUrl,
                   modelName: widget.scan['metadata']['name'] ?? 'Unnamed Scan',
+                  scanId:scanId,
                 ),
               ),
             );
@@ -1291,6 +1291,7 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
           }
 
           final _data = asyncSnapshot.data;
+          print(_data);
           return Container(
             height: 250,
             margin: const EdgeInsets.symmetric(vertical: 10),
@@ -1301,6 +1302,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
                     builder: (context) => ModelViewerScreen(
                       modelUrl: _data?.pointCloud?.processedModel ?? '',
                       modelName: widget.scan['metadata']['name'] ?? 'Unnamed Scan',
+                      scanId:widget.scan['metadata']['id'].toString(),
+
                     ),
                   ),
                 );
@@ -1592,7 +1595,6 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
                       IconButton(
                         icon: const Icon(Icons.arrow_back_ios, color: Colors.white, size: 20),
                         onPressed: (){
-                          ref.invalidate(scansProvider); // Invalidate scansProvider
                           Navigator.pop(context); // Navigate back to DashboardScreen
                         },
                       ),
