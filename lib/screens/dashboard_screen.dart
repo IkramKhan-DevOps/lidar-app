@@ -31,6 +31,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   @override
   void initState() {
     super.initState();
+
     _fetchScans();
     platform.setMethodCallHandler(_handleMethodCall);
   }
@@ -110,6 +111,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       print('Error fetching scans: ${e.message}');
       setState(() {
         _isRefreshing = false;
+
       });
       _showSnack('Couldn\'t load scans. Please try again.', isError: true);
     }
@@ -432,7 +434,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       ),
     );
   }
-
+  late AnimationController _controller;
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -445,12 +447,21 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
           const NetworkStatusAppBarIndicator(),
           const SyncAppBarAction(),
           IconButton(
+            icon: _isRefreshing
+                ? const CircularProgressIndicator(color: Colors.white)
+                : const Icon(Icons.refresh, color: Colors.white),
+            onPressed: () => setState(() {
+              _fetchScans();
+            }),
+          ),
+          IconButton(
             icon: const Icon(Icons.view_list, color: Colors.white),
             onPressed: () => setState(() {
               currentView = 'list';
               _isFullScreenMap = false;
             }),
           ),
+
           IconButton(
             icon: const Icon(Icons.grid_view, color: Colors.white),
             onPressed: () => setState(() {

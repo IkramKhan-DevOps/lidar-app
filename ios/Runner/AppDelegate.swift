@@ -17,10 +17,10 @@ import GoogleMaps
     private var scanCache: [(url: URL, metadata: ScanMetadata?)]?
     private let networkMonitor = NWPathMonitor()
     private var isOnline = false
-    private let apiBaseURL = "http://213.73.97.120/api/v1" // Your API base URL
+    private let apiBaseURL = "http://192.168.1.23:9000/api/v1" // Your API base URL
     // Processing API URL function
     private func processAPIURL(scanId: Int) -> String {
-        return "http://213.73.97.120/api/v1/scans/\(scanId)/process/"
+        return "http://192.168.1.23:9000/api/v1/scans/\(scanId)/process/"
     }
     private var autoSyncEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: "auto_sync_enabled") }
@@ -772,35 +772,18 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
         config.timeoutIntervalForResource = 1800 // 30 minutes
         let session = URLSession(configuration: config)
 
-        // 4. Create scan first
-        // Call createScan with all required parameters
-            self.createScan(folderURL: folderURL,
-                           metadataData: metadataData,
-                           session: session) { [weak self] result in
-                guard let self = self else { return }
+        // 4. Create scan with point cloud data
+        self.createScan(folderURL: folderURL,
+                       metadataData: metadataData,
+                       zipData: zipData,
+                       session: session) { [weak self] result in
+            guard let self = self else { return }
 
             switch result {
             case .success(let scanId):
-                // 5. Parallel uploads with dispatch group
-                let group = DispatchGroup()
-                var overallSuccess = true
-
-                // Upload point cloud
-                group.enter()
-                self.uploadPointCloud(scanId: scanId, zipData: zipData, session: session) { success in
-                    overallSuccess = overallSuccess && success
-                    group.leave()
-                }
-
-                // Upload GPS points
-                group.enter()
+                // Only need to upload GPS points now
                 self.uploadGPSPoints(scanId: scanId, metadataData: metadataData, session: session) { success in
-                    overallSuccess = overallSuccess && success
-                    group.leave()
-                }
-
-                group.notify(queue: .main) {
-                    completion(overallSuccess)
+                    completion(success)
                     if backgroundTask != .invalid {
                         UIApplication.shared.endBackgroundTask(backgroundTask)
                     }
@@ -817,144 +800,157 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
 
     // MARK: - Helper Methods
 
-private func createScan(folderURL: URL, metadataData: Data, session: URLSession, completion: @escaping (Result<Int, Error>) -> Void) {
-    let decoder = JSONDecoder()
-    decoder.dateDecodingStrategy = .iso8601
+    private func createScan(folderURL: URL, metadataData: Data, zipData: Data, session: URLSession, completion: @escaping (Result<Int, Error>) -> Void) {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
 
-    // Parse metadata
-    guard let meta = try? decoder.decode(ScanMetadata.self, from: metadataData) else {
-        completion(.failure(NSError(domain: "ScanError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to parse metadata"])))
-        return
-    }
+        // Parse metadata
+        guard let meta = try? decoder.decode(ScanMetadata.self, from: metadataData) else {
+            completion(.failure(NSError(domain: "ScanError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to parse metadata"])))
+            return
+        }
 
-    // Calculate actual file sizes
-    let zipURL = folderURL.appendingPathComponent("input_data.zip")
-    let usdzURL = folderURL.appendingPathComponent("model.usdz")
+        // Calculate actual file sizes
+        let zipURL = folderURL.appendingPathComponent("input_data.zip")
+        let usdzURL = folderURL.appendingPathComponent("model.usdz")
 
-    var zipSizeBytes: Int64 = 0
-    var usdzSizeBytes: Int64 = 0
+        var zipSizeBytes: Int64 = 0
+        var usdzSizeBytes: Int64 = 0
 
-    if FileManager.default.fileExists(atPath: zipURL.path),
-       let zipAttributes = try? FileManager.default.attributesOfItem(atPath: zipURL.path),
-       let zipSize = zipAttributes[.size] as? Int64 {
-        zipSizeBytes = zipSize
-    }
+        if FileManager.default.fileExists(atPath: zipURL.path),
+           let zipAttributes = try? FileManager.default.attributesOfItem(atPath: zipURL.path),
+           let zipSize = zipAttributes[.size] as? Int64 {
+            zipSizeBytes = zipSize
+        }
 
-    if FileManager.default.fileExists(atPath: usdzURL.path),
-       let usdzAttributes = try? FileManager.default.attributesOfItem(atPath: usdzURL.path),
-       let usdzSize = usdzAttributes[.size] as? Int64 {
-        usdzSizeBytes = usdzSize
-    }
+        if FileManager.default.fileExists(atPath: usdzURL.path),
+           let usdzAttributes = try? FileManager.default.attributesOfItem(atPath: usdzURL.path),
+           let usdzSize = usdzAttributes[.size] as? Int64 {
+            usdzSizeBytes = usdzSize
+        }
 
-    let totalSizeBytes = zipSizeBytes + usdzSizeBytes
-    let dataSizeMB = Double(totalSizeBytes) / (1024.0 * 1024.0)
+        let totalSizeBytes = zipSizeBytes + usdzSizeBytes
+        let dataSizeMB = Double(totalSizeBytes) / (1024.0 * 1024.0)
 
-    // Calculate area and height from bounds if available
-    var areaCovered = 0.0
-    var height = 0.0
+        // Calculate area and height from bounds if available
+        var areaCovered = 0.0
+        var height = 0.0
 
-    if let boundsSizeStr = meta.boundsSize {
-        // Parse bounds size string format: "[width, depth, height]"
-        let cleanedStr = boundsSizeStr
-            .replacingOccurrences(of: "[", with: "")
-            .replacingOccurrences(of: "]", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let boundsSizeStr = meta.boundsSize {
+            // Parse bounds size string format: "[width, depth, height]"
+            let cleanedStr = boundsSizeStr
+                .replacingOccurrences(of: "[", with: "")
+                .replacingOccurrences(of: "]", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let components = cleanedStr.components(separatedBy: ",")
-            .compactMap { component in
-                Double(component.trimmingCharacters(in: .whitespacesAndNewlines))
+            let components = cleanedStr.components(separatedBy: ",")
+                .compactMap { component in
+                    Double(component.trimmingCharacters(in: .whitespacesAndNewlines))
+                }
+
+            if components.count >= 3 {
+                let width = components[0]
+                let depth = components[1]
+                height = components[2]
+
+                // Calculate area in square meters (width × depth)
+                areaCovered = width * depth
+
+                os_log("📏 Calculated dimensions - Width: %.2f, Depth: %.2f, Height: %.2f, Area: %.2f m²",
+                      log: OSLog.default, type: .info, width, depth, height, areaCovered)
+            }
+        }
+
+        guard let createURL = URL(string: "\(apiBaseURL)/scans/") else {
+            completion(.failure(NSError(domain: "ScanError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])))
+            return
+        }
+
+        var request = URLRequest(url: createURL)
+        request.httpMethod = "POST"
+        let boundary = "Boundary-\(UUID().uuidString)"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+
+        if let token = readAuthToken(), !token.isEmpty {
+            request.setValue("Token \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        // Create multipart form data
+        var body = Data()
+
+        // Add metadata fields
+        let metadataFields: [String: Any] = [
+            "title": meta.name,
+            "description": "Uploaded from iOS app",
+            "duration": Int(meta.durationSeconds ?? 0),
+            "area_covered": areaCovered,
+            "height": height,
+            "data_size_mb": dataSizeMB,
+            "location": meta.locationName ?? "Unknown",
+            "point_count": "1000000" // You can adjust this as needed
+        ]
+
+        // Append metadata fields to the body
+        for (key, value) in metadataFields {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n".data(using: .utf8)!)
+            body.append("\(value)\r\n".data(using: .utf8)!)
+        }
+
+        // Append the point cloud file
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"gray_model\"; filename=\"input_data.zip\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: application/zip\r\n\r\n".data(using: .utf8)!)
+        body.append(zipData)
+        body.append("\r\n".data(using: .utf8)!)
+
+        // Close the boundary
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+        request.httpBody = body
+
+        session.dataTask(with: request) { data, response, error in
+            if let error = error {
+                os_log("❌ Network error: %@", log: OSLog.default, type: .error, error.localizedDescription)
+                completion(.failure(error))
+                return
             }
 
-        if components.count >= 3 {
-            let width = components[0]
-            let depth = components[1]
-            height = components[2]
-
-            // Calculate area in square meters (width × depth)
-            areaCovered = width * depth
-
-            os_log("📏 Calculated dimensions - Width: %.2f, Depth: %.2f, Height: %.2f, Area: %.2f m²",
-                  log: OSLog.default, type: .info, width, depth, height, areaCovered)
-        }
-    }
-
-    let payload: [String: Any] = [
-        "title": meta.name,
-        "description": "Uploaded from iOS app",
-        "duration": Int(meta.durationSeconds ?? 0),
-        "area_covered": areaCovered,
-        "height": height,
-        "data_size_mb": dataSizeMB,
-        "location": meta.locationName ?? "Unknown"
-    ]
-
-    os_log("📦 Payload: %@", log: OSLog.default, type: .info, payload.description)
-
-    guard let createURL = URL(string: "\(apiBaseURL)/scans/") else {
-        completion(.failure(NSError(domain: "ScanError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])))
-        return
-    }
-
-    var request = URLRequest(url: createURL)
-    request.httpMethod = "POST"
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.setValue("application/json", forHTTPHeaderField: "Accept")
-
-    if let token = readAuthToken(), !token.isEmpty {
-        request.setValue("Token \(token)", forHTTPHeaderField: "Authorization")
-    }
-
-    do {
-        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-        os_log("📤 Request body prepared successfully", log: OSLog.default, type: .info)
-    } catch {
-        os_log("❌ Failed to serialize request body: %@", log: OSLog.default, type: .error, error.localizedDescription)
-        completion(.failure(error))
-        return
-    }
-
-    session.dataTask(with: request) { data, response, error in
-        if let error = error {
-            os_log("❌ Network error: %@", log: OSLog.default, type: .error, error.localizedDescription)
-            completion(.failure(error))
-            return
-        }
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            let error = NSError(domain: "ScanError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response type"])
-            os_log("❌ %@", log: OSLog.default, type: .error, error.localizedDescription)
-            completion(.failure(error))
-            return
-        }
-
-        guard (200...201).contains(httpResponse.statusCode) else {
-            let statusCode = httpResponse.statusCode
-            let error = NSError(domain: "ScanError", code: statusCode, userInfo: [NSLocalizedDescriptionKey: "Server returned status \(statusCode)"])
-            os_log("❌ Server error: %d", log: OSLog.default, type: .error, statusCode)
-            completion(.failure(error))
-            return
-        }
-
-        guard let data = data else {
-            let error = NSError(domain: "ScanError", code: -1, userInfo: [NSLocalizedDescriptionKey: "No data in response"])
-            os_log("❌ %@", log: OSLog.default, type: .error, error.localizedDescription)
-            completion(.failure(error))
-            return
-        }
-
-        do {
-            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-            guard let scanId = json?["id"] as? Int else {
-                throw NSError(domain: "ScanError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid scan ID in response"])
+            guard let httpResponse = response as? HTTPURLResponse else {
+                let error = NSError(domain: "ScanError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response type"])
+                os_log("❌ %@", log: OSLog.default, type: .error, error.localizedDescription)
+                completion(.failure(error))
+                return
             }
-            os_log("✅ Scan created successfully with ID: %d", log: OSLog.default, type: .info, scanId)
-            completion(.success(scanId))
-        } catch {
-            os_log("❌ Failed to parse response: %@", log: OSLog.default, type: .error, error.localizedDescription)
-            completion(.failure(error))
-        }
-    }.resume()
-}
+
+            guard (200...201).contains(httpResponse.statusCode) else {
+                let statusCode = httpResponse.statusCode
+                let error = NSError(domain: "ScanError", code: statusCode, userInfo: [NSLocalizedDescriptionKey: "Server returned status \(statusCode)"])
+                os_log("❌ Server error: %d", log: OSLog.default, type: .error, statusCode)
+                completion(.failure(error))
+                return
+            }
+
+            guard let data = data else {
+                let error = NSError(domain: "ScanError", code: -1, userInfo: [NSLocalizedDescriptionKey: "No data in response"])
+                os_log("❌ %@", log: OSLog.default, type: .error, error.localizedDescription)
+                completion(.failure(error))
+                return
+            }
+
+            do {
+                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                guard let scanId = json?["id"] as? Int else {
+                    throw NSError(domain: "ScanError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid scan ID in response"])
+                }
+                os_log("✅ Scan created successfully with ID: %d", log: OSLog.default, type: .info, scanId)
+                completion(.success(scanId))
+            } catch {
+                os_log("❌ Failed to parse response: %@", log: OSLog.default, type: .error, error.localizedDescription)
+                completion(.failure(error))
+            }
+        }.resume()
+    }
 
     private func uploadPointCloud(scanId: Int, zipData: Data, session: URLSession, completion: @escaping (Bool) -> Void) {
         guard let pcURL = URL(string: "\(apiBaseURL)/scans/\(scanId)/point-cloud/") else {

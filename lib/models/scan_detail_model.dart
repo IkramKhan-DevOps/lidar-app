@@ -12,6 +12,8 @@ class ScanDetailModel {
   final double dataSizeMb;
   final String status;
   final List<GpsPointModel> gpsPoints;
+  final String? grayModel;  // Moved from PointCloudModel
+  final int pointCount;     // Moved from PointCloudModel
   final PointCloudModel? pointCloud;
   final UploadStatusModel? uploadStatus;
   final List<ScanImageModel> images;
@@ -30,6 +32,8 @@ class ScanDetailModel {
     required this.dataSizeMb,
     required this.status,
     required this.gpsPoints,
+    this.grayModel,
+    required this.pointCount,
     this.pointCloud,
     this.uploadStatus,
     required this.images,
@@ -53,6 +57,8 @@ class ScanDetailModel {
           ?.map((item) => GpsPointModel.fromJson(item as Map<String, dynamic>))
           .toList() ??
           [],
+      grayModel: json['gray_model']?.toString(),  // Added here
+      pointCount: _parseInt(json['point_count']), // Added here
       pointCloud: json['point_cloud'] != null
           ? PointCloudModel.fromJson(json['point_cloud'] as Map<String, dynamic>)
           : null,
@@ -63,7 +69,7 @@ class ScanDetailModel {
           ?.map((item) => ScanImageModel.fromJson(item as Map<String, dynamic>))
           .toList() ??
           [],
-      totalImages: _parseInt(json['total_images']), // This was the main issue
+      totalImages: _parseInt(json['total_images']),
       createdAt: _parseDateTime(json['created_at']),
       updatedAt: _parseDateTime(json['updated_at']),
     );
@@ -127,16 +133,12 @@ class GpsPointModel {
 
 class PointCloudModel {
   final int id;
-  final String? grayModel;
-  final int pointCount;
-  final String? processedModel;
+  final String? processedModel;  // Removed grayModel from here
   final String? snapshot;
   final DateTime uploadedAt;
 
   PointCloudModel({
     required this.id,
-    this.grayModel,
-    required this.pointCount,
     this.processedModel,
     this.snapshot,
     required this.uploadedAt,
@@ -145,8 +147,6 @@ class PointCloudModel {
   factory PointCloudModel.fromJson(Map<String, dynamic> json) {
     return PointCloudModel(
       id: ScanDetailModel._parseInt(json['id']),
-      grayModel: json['gray_model']?.toString(),
-      pointCount: ScanDetailModel._parseInt(json['point_count']),
       processedModel: json['processed_model']?.toString(),
       snapshot: json['snapshot']?.toString(),
       uploadedAt: ScanDetailModel._parseDateTime(json['uploaded_at']),

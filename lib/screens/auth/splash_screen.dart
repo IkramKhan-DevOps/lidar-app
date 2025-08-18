@@ -318,7 +318,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      '© ${DateTime.now().year} SeedsWild',
+                      '© ${DateTime.now().year} INConnect',
                       style: theme.textTheme.labelSmall?.copyWith(
                         color: Colors.white38,
                         fontWeight: FontWeight.w400,
