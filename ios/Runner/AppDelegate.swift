@@ -26,7 +26,7 @@ import GoogleMaps
         get { UserDefaults.standard.bool(forKey: "auto_sync_enabled") }
         set { UserDefaults.standard.set(newValue, forKey: "auto_sync_enabled") }
     }
-    
+
     private func readAuthToken() -> String? {
         // Try common shared_preferences storage patterns
         if let v = UserDefaults.standard.string(forKey: "auth_token") { return v }
@@ -219,21 +219,21 @@ import GoogleMaps
                 guard let self = self else { return }
                 let wasOffline = !self.isOnline
                 self.isOnline = path.status == .satisfied
-                
+
                 os_log("📶 [NETWORK] Network status changed: %@", log: OSLog.default, type: .info, self.isOnline ? "ONLINE" : "OFFLINE")
-                
+
                 // Notify Flutter about network status change
                 DispatchQueue.main.async {
                     self.channel?.invokeMethod("networkStatusChanged", arguments: ["isOnline": self.isOnline])
                 }
-                
+
                 if self.isOnline && wasOffline {
                     os_log("🔄 [SYNC] Device came back online, checking auto-sync setting...", log: OSLog.default, type: .info)
-                    
+
                     // Only auto-sync if auto-sync is enabled
                     if self.autoSyncEnabled {
                         os_log("🔄 [AUTO SYNC] Auto-sync enabled, starting sync after coming online...", log: OSLog.default, type: .info)
-                        
+
                         // Wait a bit for network to stabilize
                         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                             // First sync pending/failed/processing scans (these always sync regardless of auto-sync setting)
@@ -243,7 +243,7 @@ import GoogleMaps
                                 } else {
                                     os_log("❌ [SYNC] Failed to sync some offline scans", log: OSLog.default, type: .error)
                                 }
-                                
+
                                 // Only sync initialized scans if auto-sync is enabled
                                 if self.autoSyncEnabled {
                                     os_log("🔄 [AUTO SYNC] Triggering initialized scans sync...", log: OSLog.default, type: .info)
@@ -276,66 +276,66 @@ import GoogleMaps
        // Enhanced offline sync functionality
        private func syncOfflineScansToServer(completion: @escaping (Bool) -> Void) {
            os_log("🔄 [OFFLINE SYNC] Starting offline scans sync...", log: OSLog.default, type: .info)
-           
+
            let localScans = ScanLocalStorage.shared.getAllScans()
            let pendingScans = localScans.filter { scan in
                guard let metadata = scan.metadata else { return false }
                return metadata.status == "pending" || metadata.status == "failed" || metadata.status == "processing"
            }
-           
+
            guard !pendingScans.isEmpty else {
                os_log("ℹ️ [OFFLINE SYNC] No pending scans to sync", log: OSLog.default, type: .info)
                completion(true)
                return
            }
-           
+
            os_log("📜 [OFFLINE SYNC] Found %d pending scans to upload", log: OSLog.default, type: .info, pendingScans.count)
-           
+
            let group = DispatchGroup()
            var syncResults: [(scan: (url: URL, metadata: ScanMetadata?), success: Bool)] = []
-           
+
            for scan in pendingScans {
                guard let metadata = scan.metadata else { continue }
-               
+
                os_log("🚀 [OFFLINE SYNC] Uploading scan: %@", log: OSLog.default, type: .info, metadata.name)
-               
+
                // Update status to uploading
                _ = ScanLocalStorage.shared.updateScanStatus("uploading", for: scan.url)
-               
+
                group.enter()
                self.uploadScan(folderURL: scan.url) { [weak self] success in
                    syncResults.append((scan: scan, success: success))
-                   
+
                    if success {
                        os_log("✅ [OFFLINE SYNC] Successfully uploaded: %@", log: OSLog.default, type: .info, metadata.name)
-                       
+
                        // Keep local data - do not delete after successful upload
                        // Update status to uploaded but preserve local files
                        _ = ScanLocalStorage.shared.updateScanStatus("uploaded", for: scan.url)
                        os_log("📱 [OFFLINE SYNC] Keeping local scan data after successful upload: %@", log: OSLog.default, type: .info, scan.url.path)
                    } else {
                        os_log("❌ [OFFLINE SYNC] Failed to upload: %@", log: OSLog.default, type: .error, metadata.name)
-                       
+
                        // Mark scan as failed for retry later
                        _ = ScanLocalStorage.shared.updateScanStatus("failed", for: scan.url)
                    }
-                   
+
                    group.leave()
                }
            }
-           
+
            group.notify(queue: .main) {
                self.invalidateScanCache()
-               
+
                let successCount = syncResults.filter { $0.success }.count
                let failedCount = syncResults.count - successCount
-               
+
                os_log("📊 [OFFLINE SYNC] Sync completed - Success: %d, Failed: %d", log: OSLog.default, type: .info, successCount, failedCount)
-               
+
                completion(failedCount == 0)
            }
        }
-       
+
        // Legacy method for backwards compatibility
        private func syncLocalToServer(completion: @escaping (Bool) -> Void) {
            syncOfflineScansToServer(completion: completion)
@@ -391,7 +391,7 @@ import GoogleMaps
                                 let totalImages = (item["total_images"] as? Int) ?? 0
                                 let created = (item["created_at"] as? String) ?? ISO8601DateFormatter().string(from: Date())
                                 let updated = (item["updated_at"] as? String) ?? created
-                                
+
                                 // Normalize status from server to match local statuses
                                 let normalizedStatus: String
                                 switch rawStatus.lowercased() {
@@ -406,10 +406,10 @@ import GoogleMaps
                                 default:
                                     normalizedStatus = rawStatus // Keep original if unknown
                                 }
-                                
+
                                 let ts = dateFormatter.date(from: created) ?? Date()
                                 let modelSizeBytes = Int64(dataSizeMB * 1024 * 1024) // Convert MB to bytes
-                                
+
                                 return ScanMetadata(
                                     name: title,
                                     timestamp: ts,
@@ -747,346 +747,336 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
     }
 
     private func uploadScan(folderURL: URL, completion: @escaping (Bool) -> Void) {
-        os_log("🚀 [UPLOAD SCAN] Method called with folder: %@", log: OSLog.default, type: .info, folderURL.path)
-        
+        // 1. Setup background task
+        var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+        backgroundTask = UIApplication.shared.beginBackgroundTask {
+            completion(false)
+            if backgroundTask != .invalid {
+                UIApplication.shared.endBackgroundTask(backgroundTask)
+            }
+        }
+
+        // 2. Read files with timeout
         guard let metadataData = try? Data(contentsOf: folderURL.appendingPathComponent("metadata.json")),
               let zipData = try? Data(contentsOf: folderURL.appendingPathComponent("input_data.zip")) else {
-            os_log("❌ [UPLOAD SCAN] Failed to read metadata or ZIP data", log: OSLog.default, type: .error)
+            completion(false)
+            if backgroundTask != .invalid {
+                UIApplication.shared.endBackgroundTask(backgroundTask)
+            }
+            return
+        }
+
+        // 3. Configure session with proper timeouts
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 300 // 5 minutes
+        config.timeoutIntervalForResource = 1800 // 30 minutes
+        let session = URLSession(configuration: config)
+
+        // 4. Create scan first
+        // Call createScan with all required parameters
+            self.createScan(folderURL: folderURL,
+                           metadataData: metadataData,
+                           session: session) { [weak self] result in
+                guard let self = self else { return }
+
+            switch result {
+            case .success(let scanId):
+                // 5. Parallel uploads with dispatch group
+                let group = DispatchGroup()
+                var overallSuccess = true
+
+                // Upload point cloud
+                group.enter()
+                self.uploadPointCloud(scanId: scanId, zipData: zipData, session: session) { success in
+                    overallSuccess = overallSuccess && success
+                    group.leave()
+                }
+
+                // Upload GPS points
+                group.enter()
+                self.uploadGPSPoints(scanId: scanId, metadataData: metadataData, session: session) { success in
+                    overallSuccess = overallSuccess && success
+                    group.leave()
+                }
+
+                group.notify(queue: .main) {
+                    completion(overallSuccess)
+                    if backgroundTask != .invalid {
+                        UIApplication.shared.endBackgroundTask(backgroundTask)
+                    }
+                }
+
+            case .failure:
+                completion(false)
+                if backgroundTask != .invalid {
+                    UIApplication.shared.endBackgroundTask(backgroundTask)
+                }
+            }
+        }
+    }
+
+    // MARK: - Helper Methods
+
+private func createScan(folderURL: URL, metadataData: Data, session: URLSession, completion: @escaping (Result<Int, Error>) -> Void) {
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+
+    // Parse metadata
+    guard let meta = try? decoder.decode(ScanMetadata.self, from: metadataData) else {
+        completion(.failure(NSError(domain: "ScanError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to parse metadata"])))
+        return
+    }
+
+    // Calculate actual file sizes
+    let zipURL = folderURL.appendingPathComponent("input_data.zip")
+    let usdzURL = folderURL.appendingPathComponent("model.usdz")
+
+    var zipSizeBytes: Int64 = 0
+    var usdzSizeBytes: Int64 = 0
+
+    if FileManager.default.fileExists(atPath: zipURL.path),
+       let zipAttributes = try? FileManager.default.attributesOfItem(atPath: zipURL.path),
+       let zipSize = zipAttributes[.size] as? Int64 {
+        zipSizeBytes = zipSize
+    }
+
+    if FileManager.default.fileExists(atPath: usdzURL.path),
+       let usdzAttributes = try? FileManager.default.attributesOfItem(atPath: usdzURL.path),
+       let usdzSize = usdzAttributes[.size] as? Int64 {
+        usdzSizeBytes = usdzSize
+    }
+
+    let totalSizeBytes = zipSizeBytes + usdzSizeBytes
+    let dataSizeMB = Double(totalSizeBytes) / (1024.0 * 1024.0)
+
+    // Calculate area and height from bounds if available
+    var areaCovered = 0.0
+    var height = 0.0
+
+    if let boundsSizeStr = meta.boundsSize {
+        // Parse bounds size string format: "[width, depth, height]"
+        let cleanedStr = boundsSizeStr
+            .replacingOccurrences(of: "[", with: "")
+            .replacingOccurrences(of: "]", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let components = cleanedStr.components(separatedBy: ",")
+            .compactMap { component in
+                Double(component.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+
+        if components.count >= 3 {
+            let width = components[0]
+            let depth = components[1]
+            height = components[2]
+
+            // Calculate area in square meters (width × depth)
+            areaCovered = width * depth
+
+            os_log("📏 Calculated dimensions - Width: %.2f, Depth: %.2f, Height: %.2f, Area: %.2f m²",
+                  log: OSLog.default, type: .info, width, depth, height, areaCovered)
+        }
+    }
+
+    let payload: [String: Any] = [
+        "title": meta.name,
+        "description": "Uploaded from iOS app",
+        "duration": Int(meta.durationSeconds ?? 0),
+        "area_covered": areaCovered,
+        "height": height,
+        "data_size_mb": dataSizeMB,
+        "location": meta.locationName ?? "Unknown"
+    ]
+
+    os_log("📦 Payload: %@", log: OSLog.default, type: .info, payload.description)
+
+    guard let createURL = URL(string: "\(apiBaseURL)/scans/") else {
+        completion(.failure(NSError(domain: "ScanError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])))
+        return
+    }
+
+    var request = URLRequest(url: createURL)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+    if let token = readAuthToken(), !token.isEmpty {
+        request.setValue("Token \(token)", forHTTPHeaderField: "Authorization")
+    }
+
+    do {
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        os_log("📤 Request body prepared successfully", log: OSLog.default, type: .info)
+    } catch {
+        os_log("❌ Failed to serialize request body: %@", log: OSLog.default, type: .error, error.localizedDescription)
+        completion(.failure(error))
+        return
+    }
+
+    session.dataTask(with: request) { data, response, error in
+        if let error = error {
+            os_log("❌ Network error: %@", log: OSLog.default, type: .error, error.localizedDescription)
+            completion(.failure(error))
+            return
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            let error = NSError(domain: "ScanError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response type"])
+            os_log("❌ %@", log: OSLog.default, type: .error, error.localizedDescription)
+            completion(.failure(error))
+            return
+        }
+
+        guard (200...201).contains(httpResponse.statusCode) else {
+            let statusCode = httpResponse.statusCode
+            let error = NSError(domain: "ScanError", code: statusCode, userInfo: [NSLocalizedDescriptionKey: "Server returned status \(statusCode)"])
+            os_log("❌ Server error: %d", log: OSLog.default, type: .error, statusCode)
+            completion(.failure(error))
+            return
+        }
+
+        guard let data = data else {
+            let error = NSError(domain: "ScanError", code: -1, userInfo: [NSLocalizedDescriptionKey: "No data in response"])
+            os_log("❌ %@", log: OSLog.default, type: .error, error.localizedDescription)
+            completion(.failure(error))
+            return
+        }
+
+        do {
+            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            guard let scanId = json?["id"] as? Int else {
+                throw NSError(domain: "ScanError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid scan ID in response"])
+            }
+            os_log("✅ Scan created successfully with ID: %d", log: OSLog.default, type: .info, scanId)
+            completion(.success(scanId))
+        } catch {
+            os_log("❌ Failed to parse response: %@", log: OSLog.default, type: .error, error.localizedDescription)
+            completion(.failure(error))
+        }
+    }.resume()
+}
+
+    private func uploadPointCloud(scanId: Int, zipData: Data, session: URLSession, completion: @escaping (Bool) -> Void) {
+        guard let pcURL = URL(string: "\(apiBaseURL)/scans/\(scanId)/point-cloud/") else {
             completion(false)
             return
         }
-        
-        os_log("✅ [UPLOAD SCAN] Successfully read metadata (%d bytes) and ZIP (%d bytes)", log: OSLog.default, type: .info, metadataData.count, zipData.count)
 
-            // Build JSON payload for /scans/ create
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            var title = folderURL.lastPathComponent
-            var durationSeconds: Double = 0
-            var modelBytes: Int64 = 0
-            var locationName: String = ""
-            var coordinates: [[Double]] = []
-            
-            // Calculate actual file sizes
-            let zipURL = folderURL.appendingPathComponent("input_data.zip")
-            let usdzURL = folderURL.appendingPathComponent("model.usdz")
-            
-            var zipSizeBytes: Int64 = 0
-            var usdzSizeBytes: Int64 = 0
-            
-            if FileManager.default.fileExists(atPath: zipURL.path),
-               let zipAttributes = try? FileManager.default.attributesOfItem(atPath: zipURL.path),
-               let zipSize = zipAttributes[.size] as? Int64 {
-                zipSizeBytes = zipSize
+        var request = URLRequest(url: pcURL)
+        request.httpMethod = "POST"
+        let boundary = "Boundary-\(UUID().uuidString)"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        if let token = readAuthToken(), !token.isEmpty {
+            request.setValue("Token \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        var body = Data()
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"gray_model\"; filename=\"input_data.zip\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: application/zip\r\n\r\n".data(using: .utf8)!)
+        body.append(zipData)
+        body.append("\r\n".data(using: .utf8)!)
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"point_count\"\r\n\r\n".data(using: .utf8)!)
+        body.append("1000000".data(using: .utf8)!)
+        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+        request.httpBody = body
+
+        session.dataTask(with: request) { _, response, error in
+            if let error = error {
+                os_log("❌ [POINT CLOUD] Failed: %@", log: OSLog.default, type: .error, error.localizedDescription)
+                completion(false)
+                return
             }
-            
-            if FileManager.default.fileExists(atPath: usdzURL.path),
-               let usdzAttributes = try? FileManager.default.attributesOfItem(atPath: usdzURL.path),
-               let usdzSize = usdzAttributes[.size] as? Int64 {
-                usdzSizeBytes = usdzSize
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(false)
+                return
             }
-            
-            let totalSizeBytes = zipSizeBytes + usdzSizeBytes
-            
-            if let meta = try? decoder.decode(ScanMetadata.self, from: metadataData) {
-                title = meta.name
-                durationSeconds = meta.durationSeconds ?? 0
-                modelBytes = totalSizeBytes > 0 ? totalSizeBytes : (meta.modelSizeBytes ?? 0)
-                locationName = meta.locationName ?? ""
-                coordinates = meta.coordinates ?? []
-                
-                os_log("📊 [UPLOAD SCAN] Model data - Title: %@, Duration: %.1f, Size: %d bytes (%.2f MB), Location: %@, Coordinates: %d", log: OSLog.default, type: .info, title, durationSeconds, modelBytes, Double(modelBytes) / (1024.0 * 1024.0), locationName, coordinates.count)
+
+            completion((200...201).contains(httpResponse.statusCode))
+        }.resume()
+    }
+
+    private func uploadGPSPoints(scanId: Int, metadataData: Data, session: URLSession, completion: @escaping (Bool) -> Void) {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        guard let meta = try? decoder.decode(ScanMetadata.self, from: metadataData),
+              let coords = meta.coordinates, !coords.isEmpty else {
+            completion(true) // No GPS points is not an error
+            return
+        }
+
+        let group = DispatchGroup()
+        var allOk = true
+
+        for (index, coord) in coords.enumerated() {
+            guard coord.count >= 2 else { continue }
+
+            group.enter()
+
+            guard let url = URL(string: "\(apiBaseURL)/scans/\(scanId)/gps-points/") else {
+                allOk = false
+                group.leave()
+                continue
             }
-            // Calculate scan area and height from sceneBounds if available in metadata
-            var areaCovered = 0.0
-            var height = 0.0
-            
-            if let meta = try? decoder.decode(ScanMetadata.self, from: metadataData),
-               let boundsSizeStr = meta.boundsSize {
-                // Parse bounds size string format: "[width, depth, height]"
-                let cleanedStr = boundsSizeStr.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-                let components = cleanedStr.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
-                
-                if components.count >= 3 {
-                    let width = components[0]
-                    let depth = components[1]
-                    height = components[2]
-                    
-                    // Calculate area in square meters (width × depth)
-                    areaCovered = width * depth
-                }
+
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            if let token = readAuthToken(), !token.isEmpty {
+                request.setValue("Token \(token)", forHTTPHeaderField: "Authorization")
             }
-            
-            let payload: [String: Any] = [
-                "title": title,
-                "description": "Uploaded from iOS app",
-                "duration": Int(durationSeconds),
-                "area_covered": areaCovered,
-                "height": height,
-                "data_size_mb": Double(modelBytes) / (1024.0 * 1024.0),
-                "location": locationName.isEmpty ? "Unknown" : locationName
+
+            let body: [String: Any] = [
+                "latitude": coord[0],
+                "longitude": coord[1]
             ]
+            request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
-            // Step 1: Create scan
-            guard let createURL = URL(string: "\(apiBaseURL)/scans/") else { completion(false); return }
-            var createReq = URLRequest(url: createURL)
-            createReq.httpMethod = "POST"
-            createReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            createReq.setValue("application/json", forHTTPHeaderField: "Accept")
-            if let token = readAuthToken(), !token.isEmpty { createReq.setValue("Token \(token)", forHTTPHeaderField: "Authorization") }
-            createReq.httpBody = try? JSONSerialization.data(withJSONObject: payload)
-            
-            // Log the create scan request
-            os_log("🚀 [CREATE SCAN] POST %@", log: OSLog.default, type: .info, createURL.absoluteString)
-            os_log("📋 [CREATE SCAN] Headers: %@", log: OSLog.default, type: .info, createReq.allHTTPHeaderFields?.description ?? "None")
-            os_log("📦 [CREATE SCAN] Body: %@", log: OSLog.default, type: .info, String(data: createReq.httpBody ?? Data(), encoding: .utf8) ?? "None")
+            session.dataTask(with: request) { data, response, error in
+                defer { group.leave() }
 
-            URLSession.shared.dataTask(with: createReq) { data, response, error in
                 if let error = error {
-                    os_log("❌ [CREATE SCAN] Failed: %@", log: OSLog.default, type: .error, error.localizedDescription)
-                    completion(false)
+                    os_log("❌ [GPS POINTS] Point %d upload failed: %@", log: OSLog.default, type: .error, index + 1, error.localizedDescription)
+                    allOk = false
                     return
                 }
-                guard let data = data, let http = response as? HTTPURLResponse, (200...201).contains(http.statusCode) else {
-                    let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-                    os_log("❌ [CREATE SCAN] Unexpected status: %d", log: OSLog.default, type: .error, statusCode)
-                    if let responseData = data, let responseString = String(data: responseData, encoding: .utf8) {
-                        os_log("📥 [CREATE SCAN] Response: %@", log: OSLog.default, type: .error, responseString)
-                    }
-                    completion(false)
+
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    allOk = false
                     return
                 }
-                var scanId: Int?
-                if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { scanId = obj["id"] as? Int }
-                guard let sid = scanId else {
-                    os_log("❌ [CREATE SCAN] Missing id in response", log: OSLog.default, type: .error)
-                    completion(false)
-                    return
+
+                if !(200...201).contains(httpResponse.statusCode) {
+                    allOk = false
                 }
-                
-                os_log("✅ [CREATE SCAN] Success! Scan ID: %d", log: OSLog.default, type: .info, sid)
-                
-                // Step 2: Upload point cloud zip to /scans/{scan_id}/point-cloud/
-                guard let pcURL = URL(string: "\(self.apiBaseURL)/scans/\(sid)/point-cloud/") else { completion(true); return }
-                var pcReq = URLRequest(url: pcURL)
-                pcReq.httpMethod = "POST"
-                let boundary = "Boundary-\(UUID().uuidString)"
-                pcReq.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-                if let token = self.readAuthToken(), !token.isEmpty { pcReq.setValue("Token \(token)", forHTTPHeaderField: "Authorization") }
-                var body = Data()
-                body.append("--\(boundary)\r\n".data(using: .utf8)!)
-                body.append("Content-Disposition: form-data; name=\"gray_model\"; filename=\"input_data.zip\"\r\n".data(using: .utf8)!)
-                body.append("Content-Type: application/zip\r\n\r\n".data(using: .utf8)!)
-                body.append(zipData)
-                body.append("\r\n".data(using: .utf8)!)
-                // Add required point_count field
-                body.append("--\(boundary)\r\n".data(using: .utf8)!)
-                body.append("Content-Disposition: form-data; name=\"point_count\"\r\n\r\n".data(using: .utf8)!)
-                body.append("1000000".data(using: .utf8)!) // Default point count, adjust as needed
-                body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
-                pcReq.httpBody = body
-                
-                // Log the point cloud upload request
-                os_log("🚀 [POINT CLOUD] POST %@", log: OSLog.default, type: .info, pcURL.absoluteString)
-                os_log("📋 [POINT CLOUD] Headers: %@", log: OSLog.default, type: .info, pcReq.allHTTPHeaderFields?.description ?? "None")
-                os_log("📦 [POINT CLOUD] Body size: %d bytes, Boundary: %@", log: OSLog.default, type: .info, body.count, boundary)
-                
-                URLSession.shared.dataTask(with: pcReq) { _, response, error in
-                    if let error = error {
-                        os_log("❌ [POINT CLOUD] Failed: %@", log: OSLog.default, type: .error, error.localizedDescription)
-                    } else {
-                        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-                        os_log("✅ [POINT CLOUD] Status: %d", log: OSLog.default, type: .info, statusCode)
-                    }
-                    
-                    // Step 3: Upload GPS points (if any)
-                    self.uploadGPSPoints(scanId: sid, metadataData: metadataData) { _ in
-                        // Step 4: Upload images (if any)
-//                        self.uploadScanImages(scanId: sid, folderURL: folderURL) { _ in
-                            // Step 5: Post upload status - uploaded scans should be pending for processing
-                            self.postUploadStatus(scanId: sid, status: "pending", errorMessage: nil) { _ in
-                                completion(true)
-                            }
-//                        }
-                    }
-                }.resume()
             }.resume()
         }
 
-        private func uploadPointCloud(scanId: Int, zipData: Data, completion: @escaping (Bool) -> Void) {
-            // Try point-cloud endpoint first using field name 'gray_model'. If it fails, try 'file'. If still fails, send to process endpoint.
-            func multipartRequest(fieldName: String) -> URLRequest? {
-                guard let pcURL = URL(string: "\(self.apiBaseURL)/scans/\(scanId)/point-cloud/") else { return nil }
-                var req = URLRequest(url: pcURL)
-                req.httpMethod = "POST"
-                let boundary = "Boundary-\(UUID().uuidString)"
-                req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-                if let token = self.readAuthToken(), !token.isEmpty { req.setValue("Token \(token)", forHTTPHeaderField: "Authorization") }
-                var body = Data()
-                body.append("--\(boundary)\r\n".data(using: .utf8)!)
-                body.append("Content-Disposition: form-data; name=\"\(fieldName)\"; filename=\"input_data.zip\"\r\n".data(using: .utf8)!)
-                body.append("Content-Type: application/zip\r\n\r\n".data(using: .utf8)!)
-                body.append(zipData)
-                body.append("\r\n".data(using: .utf8)!)
-                // Add required point_count field
-                body.append("--\(boundary)\r\n".data(using: .utf8)!)
-                body.append("Content-Disposition: form-data; name=\"point_count\"\r\n\r\n".data(using: .utf8)!)
-                body.append("1000000".data(using: .utf8)!) // Default point count, adjust as needed
-                body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
-                req.httpBody = body
-                return req
-            }
-            func processEndpointFallback() {
-                guard let processURL = URL(string: "\(self.apiBaseURL)/scans/process/") else { completion(false); return }
-                var req = URLRequest(url: processURL)
-                req.httpMethod = "POST"
-                req.setValue("application/zip", forHTTPHeaderField: "Content-Type")
-                req.setValue("application/json", forHTTPHeaderField: "Accept")
-                if let token = self.readAuthToken(), !token.isEmpty { req.setValue("Token \(token)", forHTTPHeaderField: "Authorization") }
-                req.httpBody = zipData
-                URLSession.shared.dataTask(with: req) { data, response, error in
-                    if let error = error {
-                        os_log("Process endpoint error: %@", log: OSLog.default, type: .error, error.localizedDescription)
-                        completion(false)
-                        return
-                    }
-                    let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-                    if status == 200 || status == 201 || status == 202 {
-                        os_log("Process endpoint accepted zip (status %d)", log: OSLog.default, type: .info, status)
-                        completion(true)
-                    } else {
-                        os_log("Process endpoint unexpected status %d", log: OSLog.default, type: .error, status)
-                        completion(false)
-                    }
-                }.resume()
-            }
-
-            // Try with 'gray_model'
-            if var req = multipartRequest(fieldName: "gray_model") {
-                URLSession.shared.dataTask(with: req) { _, response, _ in
-                    let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-                    if status == 200 || status == 201 {
-                        completion(true)
-                    } else {
-                        // Try with 'file'
-                        if let req2 = multipartRequest(fieldName: "file") {
-                            URLSession.shared.dataTask(with: req2) { _, response2, _ in
-                                let status2 = (response2 as? HTTPURLResponse)?.statusCode ?? -1
-                                if status2 == 200 || status2 == 201 {
-                                    completion(true)
-                                } else {
-                                    // Fallback to process endpoint
-                                    processEndpointFallback()
-                                }
-                            }.resume()
-                        } else {
-                            processEndpointFallback()
-                        }
-                    }
-                }.resume()
-            } else {
-                processEndpointFallback()
-            }
+        group.notify(queue: .main) {
+            completion(allOk)
         }
-
-        private func uploadGPSPoints(scanId: Int, metadataData: Data, completion: @escaping (Bool) -> Void) {
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            
-            // Debug: Log the metadata content
-            if let metadataString = String(data: metadataData, encoding: .utf8) {
-                os_log("📋 [GPS POINTS] Metadata content for scan %d: %@", log: OSLog.default, type: .info, scanId, metadataString)
-            }
-            
-            let meta: ScanMetadata?
-            do {
-                meta = try decoder.decode(ScanMetadata.self, from: metadataData)
-            } catch {
-                os_log("❌ [GPS POINTS] Failed to decode metadata for scan %d: %@", log: OSLog.default, type: .error, scanId, error.localizedDescription)
-                completion(true)
-                return
-            }
-            
-            guard let meta = meta, let coords = meta.coordinates, !coords.isEmpty else {
-                os_log("ℹ️ [GPS POINTS] No GPS coordinates found in metadata for scan %d. Meta: %@", log: OSLog.default, type: .info, scanId, String(describing: meta))
-                completion(true)
-                return
-            }
-            
-            os_log("🚀 [GPS POINTS] Found %d GPS coordinates to upload for scan %d", log: OSLog.default, type: .info, coords.count, scanId)
-            let group = DispatchGroup()
-            var allOk = true
-                for (index, coord) in coords.enumerated() {
-                if coord.count < 2 { continue }
-                let lat = coord[0]
-                let lon = coord[1]
-
-                os_log("📍 [GPS POINTS] Uploading GPS point %d: lat=%.6f, lon=%.6f", log: OSLog.default, type: .info, index + 1, lat, lon)
-
-                guard let url = URL(string: "\(apiBaseURL)/scans/\(scanId)/gps-points/") else { continue }
-                var req = URLRequest(url: url)
-                req.httpMethod = "POST"
-                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                req.setValue("application/json", forHTTPHeaderField: "Accept")
-                if let token = readAuthToken(), !token.isEmpty { req.setValue("Token \(token)", forHTTPHeaderField: "Authorization") }
-                
-                // Send only latitude and longitude as per GPSPathSerializer
-                // Ensure proper latitude/longitude assignment
-                let body: [String: Any] = [
-                    "latitude": lat,
-                    "longitude": lon
-                ]
-                req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-                
-                // Log the GPS point upload request
-                os_log("🚀 [GPS POINTS] POST %@ (Point %d)", log: OSLog.default, type: .info, url.absoluteString, index + 1)
-                os_log("📋 [GPS POINTS] Headers: %@", log: OSLog.default, type: .info, req.allHTTPHeaderFields?.description ?? "None")
-                os_log("📦 [GPS POINTS] Body: %@", log: OSLog.default, type: .info, String(data: req.httpBody ?? Data(), encoding: .utf8) ?? "None")
-                
-                group.enter()
-                URLSession.shared.dataTask(with: req) { data, response, error in
-                    if let error = error { 
-                        os_log("❌ [GPS POINTS] Point %d upload failed: %@", log: OSLog.default, type: .error, index + 1, error.localizedDescription)
-                        allOk = false 
-                    }
-                    let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-                    if !(status == 200 || status == 201 || status == 204) { 
-                        os_log("❌ [GPS POINTS] Point %d upload failed with status %d", log: OSLog.default, type: .error, index + 1, status)
-                        // Log response body for debugging
-                        if let data = data, let responseString = String(data: data, encoding: .utf8) {
-                            os_log("📥 [GPS POINTS] Response body: %@", log: OSLog.default, type: .error, responseString)
-                        }
-                        allOk = false 
-                    } else {
-                        os_log("✅ [GPS POINTS] Point %d uploaded successfully (Status: %d)", log: OSLog.default, type: .info, index + 1, status)
-                        // Log successful response for debugging
-                        if let data = data, let responseString = String(data: data, encoding: .utf8) {
-                            os_log("📥 [GPS POINTS] Success response: %@", log: OSLog.default, type: .info, responseString)
-                        }
-                    }
-                    group.leave()
-                }.resume()
-            }
-            group.notify(queue: .main) { completion(allOk) }
-        }
-
+    }
         private func uploadScanImages(scanId: Int, folderURL: URL, completion: @escaping (Bool) -> Void) {
             guard let imagePaths = ScanLocalStorage.shared.getScanImages(folderPath: folderURL.path), !imagePaths.isEmpty else {
                 os_log("ℹ️ [IMAGES] No images found for scan %d", log: OSLog.default, type: .info, scanId)
                 completion(true)
                 return
             }
-            
+
             os_log("🚀 [IMAGES] Found %d images to upload for scan %d", log: OSLog.default, type: .info, imagePaths.count, scanId)
             let group = DispatchGroup()
             var allOk = true
             for (index, imagePath) in imagePaths.enumerated() {
                 let fileURL = URL(fileURLWithPath: imagePath)
-                guard let imageData = try? Data(contentsOf: fileURL) else { 
+                guard let imageData = try? Data(contentsOf: fileURL) else {
                     os_log("⚠️ [IMAGES] Failed to read image data for %@", log: OSLog.default, type: .error, imagePath)
-                    continue 
+                    continue
                 }
-                
+
                 guard let url = URL(string: "\(apiBaseURL)/scans/\(scanId)/images/") else { continue }
                 var req = URLRequest(url: url)
                 req.httpMethod = "POST"
@@ -1112,22 +1102,22 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
                 body.append(iso.data(using: .utf8)!)
                 body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
                 req.httpBody = body
-                
+
                 // Log the image upload request
                 os_log("🚀 [IMAGES] POST %@ (Image %d: %@)", log: OSLog.default, type: .info, url.absoluteString, index + 1, fileURL.lastPathComponent)
                 os_log("📋 [IMAGES] Headers: %@", log: OSLog.default, type: .info, req.allHTTPHeaderFields?.description ?? "None")
                 os_log("📦 [IMAGES] Body size: %d bytes, Boundary: %@", log: OSLog.default, type: .info, body.count, boundary)
-                
+
                 group.enter()
                 URLSession.shared.dataTask(with: req) { _, response, error in
-                    if let error = error { 
+                    if let error = error {
                         os_log("❌ [IMAGES] Image %d upload failed: %@", log: OSLog.default, type: .error, index + 1, error.localizedDescription)
-                        allOk = false 
+                        allOk = false
                     }
                     let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-                    if !(status == 200 || status == 201) { 
+                    if !(status == 200 || status == 201) {
                         os_log("❌ [IMAGES] Image %d upload failed with status %d", log: OSLog.default, type: .error, index + 1, status)
-                        allOk = false 
+                        allOk = false
                     } else {
                         os_log("✅ [IMAGES] Image %d uploaded successfully (Status: %d)", log: OSLog.default, type: .info, index + 1, status)
                     }
@@ -1145,7 +1135,7 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
             req.setValue("application/json", forHTTPHeaderField: "Accept")
             if let token = readAuthToken(), !token.isEmpty { req.setValue("Token \(token)", forHTTPHeaderField: "Authorization") }
             let iso = ISO8601DateFormatter().string(from: Date())
-            
+
             // Map status to Django model choices: 'pending', 'uploading', 'failed', 'completed'
             let djangoStatus: String
             switch status {
@@ -1160,7 +1150,7 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
             default:
                 djangoStatus = "uploading"
             }
-            
+
             let body: [String: Any] = [
                 "status": djangoStatus,
                 "last_attempt": iso,
@@ -1177,19 +1167,19 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
 
     private func getSavedScans(result: @escaping FlutterResult) {
         os_log("📱 [GET SAVED SCANS] Method called, online: %@", log: OSLog.default, type: .info, isOnline ? "YES" : "NO")
-        
+
         // Always return a valid response structure, even if empty
         os_log("📱 [GET SAVED SCANS] Getting local scans...", log: OSLog.default, type: .info)
-        
+
         // If online, fetch from API and merge with local scans
         if isOnline {
             fetchAPIScans { [weak self] apiScans in
                 guard self != nil else { return }
-                
+
                 DispatchQueue.main.async {
                     let localScans = ScanLocalStorage.shared.getAllScans()
                     var scanList: [[String: Any]] = []
-                    
+
                     // Add API scans first (uploaded scans from server)
                     if let apiScans = apiScans {
                         os_log("📡 [GET SAVED SCANS] Fetched %d scans from API", log: OSLog.default, type: .info, apiScans.count)
@@ -1213,14 +1203,14 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
                     } else {
                         os_log("⚠️ [GET SAVED SCANS] Failed to fetch API scans, falling back to local only", log: OSLog.default, type: .error)
                     }
-                                        
+
                     // Sort by timestamp (newest first)
                     scanList.sort { (scan1, scan2) in
                         let timestamp1 = scan1["timestamp"] as? TimeInterval ?? 0
                         let timestamp2 = scan2["timestamp"] as? TimeInterval ?? 0
                         return timestamp1 > timestamp2
                     }
-                    
+
                     os_log("📱 [GET SAVED SCANS] Returning %d total scans (API + Local)", log: OSLog.default, type: .info, scanList.count)
                     result(["scans": scanList])
                 }
@@ -1230,7 +1220,7 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
             DispatchQueue.main.async {
                 let localScans = ScanLocalStorage.shared.getAllScans()
                 var scanList: [[String: Any]] = []
-                
+
                 for scan in localScans {
                     if let metadata = scan.metadata {
                         var scanDict: [String: Any] = [
@@ -1245,30 +1235,30 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
                             "hasUSDZ": ScanLocalStorage.shared.hasUSDZModel(in: scan.url),
                             "isFromAPI": false
                         ]
-                        
+
                         if let locationName = metadata.locationName {
                             scanDict["locationName"] = locationName
                         }
-                        
+
                         if let coordinates = metadata.coordinates, !coordinates.isEmpty {
                             scanDict["coordinates"] = coordinates
                         }
-                        
+
                         if let snapshotPath = metadata.snapshotPath {
                             scanDict["snapshotPath"] = snapshotPath
                         }
-                        
+
                         scanList.append(scanDict)
                     }
                 }
-                
+
                 // Sort by timestamp (newest first)
                 scanList.sort { (scan1, scan2) in
                     let timestamp1 = scan1["timestamp"] as? TimeInterval ?? 0
                     let timestamp2 = scan2["timestamp"] as? TimeInterval ?? 0
                     return timestamp1 > timestamp2
                 }
-                
+
                 os_log("📱 [GET SAVED SCANS] Returning %d local scans (OFFLINE)", log: OSLog.default, type: .info, scanList.count)
                 result(["scans": scanList])
             }
@@ -1738,9 +1728,9 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
         openFolderResult?("Folder open cancelled")
         openFolderResult = nil
     }
-    
+
     // MARK: - Upload Helper Methods
-    
+
     private func uploadProcessedScan(folderURL: URL, usdzURL: URL, modelSizeBytes: Int64, completion: @escaping (Bool) -> Void) {
         // First, try to get or create the scan record on the backend
         self.ensureScanExistsOnBackend(folderURL: folderURL) { [weak self] (scanId: Int?) in
@@ -1749,7 +1739,7 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
                 completion(false)
                 return
             }
-            
+
             // Upload the processed USDZ model to point-cloud endpoint
             self.uploadProcessedModel(scanId: scanId, usdzURL: usdzURL) { modelUploadSuccess in
                 if modelUploadSuccess {
@@ -1763,7 +1753,7 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
             }
         }
     }
-    
+
     private func uploadFailedScan(folderURL: URL, error: FlutterError, completion: @escaping (Bool) -> Void) {
         // First, try to get or create the scan record on the backend
         self.ensureScanExistsOnBackend(folderURL: folderURL) { [weak self] (scanId: Int?) in
@@ -1772,7 +1762,7 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
                 completion(false)
                 return
             }
-            
+
             // Post upload status indicating processing failure
             let errorMessage = error.message ?? "Unknown processing error"
             self.postUploadStatus(scanId: scanId, status: "failed", errorMessage: errorMessage) { statusSuccess in
@@ -1780,18 +1770,18 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
             }
         }
     }
-    
+
     private func ensureScanExistsOnBackend(folderURL: URL, completion: @escaping (Int?) -> Void) {
         // Check if scan already exists by trying to upload basic scan data
         let metadataURL = folderURL.appendingPathComponent("metadata.json")
         let zipURL = folderURL.appendingPathComponent("input_data.zip")
-        
+
         guard let metadataData = try? Data(contentsOf: metadataURL),
               let _ = try? Data(contentsOf: zipURL) else {
             completion(nil)
             return
         }
-        
+
         // Try to create scan record on backend
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -1799,14 +1789,14 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
         var durationSeconds: Double = 0
         var modelBytes: Int64 = 0
         var locationName: String = ""
-        
+
         if let meta = try? decoder.decode(ScanMetadata.self, from: metadataData) {
             title = meta.name
             durationSeconds = meta.durationSeconds ?? 0
             modelBytes = meta.modelSizeBytes ?? 0
             locationName = meta.locationName ?? ""
         }
-        
+
         let payload: [String: Any] = [
             "title": title,
             "description": "Processed scan from iOS app",
@@ -1816,7 +1806,7 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
             "data_size_mb": Double(modelBytes) / (1024.0 * 1024.0),
             "location": locationName.isEmpty ? "Unknown" : locationName
         ]
-        
+
         guard let createURL = URL(string: "\(apiBaseURL)/scans/") else { completion(nil); return }
         var createReq = URLRequest(url: createURL)
         createReq.httpMethod = "POST"
@@ -1824,20 +1814,20 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
         createReq.setValue("application/json", forHTTPHeaderField: "Accept")
         if let token = readAuthToken(), !token.isEmpty { createReq.setValue("Token \(token)", forHTTPHeaderField: "Authorization") }
         createReq.httpBody = try? JSONSerialization.data(withJSONObject: payload)
-        
+
         URLSession.shared.dataTask(with: createReq) { data, response, error in
             if let error = error {
                 os_log("Failed to create scan record for processed scan: %@", log: OSLog.default, type: .error, error.localizedDescription)
                 completion(nil)
                 return
             }
-            
+
             guard let data = data, let http = response as? HTTPURLResponse, (200...201).contains(http.statusCode) else {
                 os_log("Failed to create scan record for processed scan - unexpected status", log: OSLog.default, type: .error)
                 completion(nil)
                 return
             }
-            
+
             if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let scanId = obj["id"] as? Int {
                 completion(scanId)
@@ -1846,14 +1836,14 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
             }
         }.resume()
     }
-    
+
     private func uploadProcessedModel(scanId: Int, usdzURL: URL, completion: @escaping (Bool) -> Void) {
         guard let usdzData = try? Data(contentsOf: usdzURL) else {
             os_log("Failed to read USDZ data for upload", log: OSLog.default, type: .error)
             completion(false)
             return
         }
-        
+
         // Try to upload to point-cloud endpoint with processed_model field
         guard let pcURL = URL(string: "\(apiBaseURL)/scans/\(scanId)/point-cloud/") else { completion(false); return }
         var pcReq = URLRequest(url: pcURL)
@@ -1861,7 +1851,7 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
         let boundary = "Boundary-\(UUID().uuidString)"
         pcReq.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         if let token = readAuthToken(), !token.isEmpty { pcReq.setValue("Token \(token)", forHTTPHeaderField: "Authorization") }
-        
+
         var body = Data()
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"processed_model\"; filename=\"model.usdz\"\r\n".data(using: .utf8)!)
@@ -1869,14 +1859,14 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
         body.append(usdzData)
         body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
         pcReq.httpBody = body
-        
+
         URLSession.shared.dataTask(with: pcReq) { _, response, error in
             if let error = error {
                 os_log("Failed to upload processed model: %@", log: OSLog.default, type: .error, error.localizedDescription)
                 completion(false)
                 return
             }
-            
+
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
             if statusCode == 200 || statusCode == 201 {
                 os_log("Successfully uploaded processed model to backend", log: OSLog.default, type: .info)
@@ -1890,7 +1880,7 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
 
     private func handleUploadScanToBackend(call: FlutterMethodCall, result: @escaping FlutterResult) {
         os_log("🔍 [UPLOAD HANDLER] Method called with arguments: %@", log: OSLog.default, type: .info, String(describing: call.arguments))
-        
+
         guard let args = call.arguments as? [String: Any],
               let folderPath = args["folderPath"] as? String else {
             os_log("❌ [UPLOAD HANDLER] Invalid arguments: %@", log: OSLog.default, type: .error, String(describing: call.arguments))
@@ -1922,7 +1912,7 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
 
         // Trigger the full upload flow immediately
         os_log("🚀 [UPLOAD HANDLER] Starting immediate backend upload for scan: %@", log: OSLog.default, type: .info, folderPath)
-        
+
         self.uploadScan(folderURL: folderURL) { success in
             os_log("📱 [UPLOAD HANDLER] uploadScan completion called with success: %@", log: OSLog.default, type: .info, success ? "YES" : "NO")
             if success {
@@ -1937,13 +1927,13 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
                 ))
             }
         }
-        
+
         os_log("🔍 [UPLOAD HANDLER] uploadScan method called, waiting for completion...", log: OSLog.default, type: .info)
     }
-    
-    
+
+
     // MARK: - Method Channel Testing
-    
+
     /**
      * Tests method channel connectivity by sending a test message to Flutter.
      * This helps ensure the channel is still working after memory warnings or other events.
@@ -1953,9 +1943,9 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
             os_log("⚠️ [METHOD CHANNEL TEST] Channel is nil", log: OSLog.default, type: .error)
             return
         }
-        
+
         os_log("🔍 [METHOD CHANNEL TEST] Testing method channel connectivity...", log: OSLog.default, type: .info)
-        
+
         channel.invokeMethod("testConnectivity", arguments: [
             "timestamp": Date().timeIntervalSince1970,
             "source": "ios_native"
@@ -1967,7 +1957,7 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
             }
         }
     }
-    
+
     @objc private func handleUploadNotification(_ notification: Notification) {
          guard let userInfo = notification.userInfo,
                let folderPath = userInfo["folderPath"] as? String else {
@@ -2020,16 +2010,16 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
              _ = ScanLocalStorage.shared.updateScanStatus("initialized", for: folderURL)
          }
      }
-    
+
     // MARK: - Local Data Management
-    
+
     private func clearAllLocalData(call: FlutterMethodCall, result: @escaping FlutterResult) {
         os_log("🗑️ [CLEAR LOCAL DATA] Starting to clear all local scan data", log: OSLog.default, type: .info)
-        
+
         let localScans = ScanLocalStorage.shared.getAllScans()
         var deletedCount = 0
         var failedCount = 0
-        
+
         for scan in localScans {
             do {
                 try FileManager.default.removeItem(at: scan.url)
@@ -2040,15 +2030,15 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
                 os_log("❌ [CLEAR LOCAL DATA] Failed to delete scan: %@ - Error: %@", log: OSLog.default, type: .error, scan.url.path, error.localizedDescription)
             }
         }
-        
+
         // Clear cache
         invalidateScanCache()
-        
+
         let message = "Deleted \(deletedCount) scans successfully"
         let details = failedCount > 0 ? "Failed to delete \(failedCount) scans" : nil
-        
+
         os_log("📊 [CLEAR LOCAL DATA] Summary - Deleted: %d, Failed: %d", log: OSLog.default, type: .info, deletedCount, failedCount)
-        
+
         result([
             "success": failedCount == 0,
             "deleted_count": deletedCount,
@@ -2057,9 +2047,9 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
             "details": details as Any
         ])
     }
-    
+
     // MARK: - Auto-Sync Settings Management
-    
+
     private func setAutoSyncEnabled(call: FlutterMethodCall, result: @escaping FlutterResult) {
         guard let args = call.arguments as? [String: Any],
               let enabled = args["enabled"] as? Bool else {
@@ -2070,20 +2060,20 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
             ))
             return
         }
-        
+
         autoSyncEnabled = enabled
         os_log("📱 [AUTO SYNC] Setting auto-sync enabled: %@", log: OSLog.default, type: .info, enabled ? "YES" : "NO")
-        
+
         // Don't automatically sync when enabling auto-sync - this should be a separate user action
         // Auto-sync will only take effect for new scans or when network comes back online
-        
+
         result("Auto-sync setting updated successfully")
     }
-    
+
     private func getAutoSyncEnabled(result: @escaping FlutterResult) {
         result(["enabled": autoSyncEnabled])
     }
-    
+
     private func syncInitializedScans(result: @escaping FlutterResult) {
         syncInitializedScans { success in
             if success {
@@ -2097,77 +2087,77 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
             }
         }
     }
-    
+
     private func syncInitializedScans(completion: @escaping (Bool) -> Void) {
         os_log("🔄 [SYNC INITIALIZED] Starting sync of initialized scans...", log: OSLog.default, type: .info)
-        
+
         let localScans = ScanLocalStorage.shared.getAllScans()
         let initializedScans = localScans.filter { scan in
             guard let metadata = scan.metadata else { return false }
             return metadata.status == "initialized"
         }
-        
+
         guard !initializedScans.isEmpty else {
             os_log("ℹ️ [SYNC INITIALIZED] No initialized scans to sync", log: OSLog.default, type: .info)
             completion(true)
             return
         }
-        
+
         os_log("📜 [SYNC INITIALIZED] Found %d initialized scans to upload", log: OSLog.default, type: .info, initializedScans.count)
-        
+
         let group = DispatchGroup()
         var syncResults: [(scan: (url: URL, metadata: ScanMetadata?), success: Bool)] = []
-        
+
         for scan in initializedScans {
             guard let metadata = scan.metadata else { continue }
-            
+
             os_log("🚀 [SYNC INITIALIZED] Uploading scan: %@", log: OSLog.default, type: .info, metadata.name)
-            
+
             // Update status to uploading
             _ = ScanLocalStorage.shared.updateScanStatus("uploading", for: scan.url)
-            
+
             group.enter()
             self.uploadScan(folderURL: scan.url) { [weak self] success in
                 syncResults.append((scan: scan, success: success))
-                
+
                 if success {
                     os_log("✅ [SYNC INITIALIZED] Successfully uploaded: %@", log: OSLog.default, type: .info, metadata.name)
-                    
+
                     // Update status to uploaded after successful manual upload
                     _ = ScanLocalStorage.shared.updateScanStatus("uploaded", for: scan.url)
                     os_log("📱 [SYNC INITIALIZED] Updated scan status to uploaded: %@", log: OSLog.default, type: .info, scan.url.path)
                 } else {
                     os_log("❌ [SYNC INITIALIZED] Failed to upload: %@", log: OSLog.default, type: .error, metadata.name)
-                    
+
                     // Revert status back to initialized for retry later
                     _ = ScanLocalStorage.shared.updateScanStatus("initialized", for: scan.url)
                 }
-                
+
                 group.leave()
             }
         }
-        
+
         group.notify(queue: .main) {
             self.invalidateScanCache()
-            
+
             let successCount = syncResults.filter { $0.success }.count
             let failedCount = syncResults.count - successCount
-            
+
             os_log("📊 [SYNC INITIALIZED] Sync completed - Success: %d, Failed: %d", log: OSLog.default, type: .info, successCount, failedCount)
-            
+
             // Notify Flutter about sync completion
             self.channel?.invokeMethod("initializedSyncComplete", arguments: [
                 "success": failedCount == 0,
                 "successCount": successCount,
                 "failedCount": failedCount
             ])
-            
+
             completion(failedCount == 0)
         }
     }
-    
+
     // MARK: - Server-Side Model Processing
-    
+
     private func processModelOnServer(call: FlutterMethodCall, result: @escaping FlutterResult) {
         guard let args = call.arguments as? [String: Any],
               let scanId = args["scanId"] as? Int else {
@@ -2178,9 +2168,9 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
             ))
             return
         }
-        
+
         os_log("🔄 [SERVER PROCESS] Starting server-side processing for scan ID: %d", log: OSLog.default, type: .info, scanId)
-        
+
         processModelOnServer(scanId: scanId) { [weak self] success, message in
             if success {
                 os_log("✅ [SERVER PROCESS] Successfully triggered processing for scan ID: %d", log: OSLog.default, type: .info, scanId)
@@ -2195,91 +2185,143 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
             }
         }
     }
-    
     private func processModelOnServer(scanId: Int, completion: @escaping (Bool, String) -> Void) {
+        // 1. Setup background task properly
+        var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "modelProcessing") {
+            // Emergency cleanup if time expires
+            if backgroundTask != .invalid {
+                UIApplication.shared.endBackgroundTask(backgroundTask)
+            }
+            completion(false, "Background time expired")
+        }
+
         guard let url = URL(string: processAPIURL(scanId: scanId)) else {
             completion(false, "Invalid processing API URL")
+            if backgroundTask != .invalid {
+                UIApplication.shared.endBackgroundTask(backgroundTask)
+            }
             return
         }
-        
+
+        // 2. Configure session with proper timeouts
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 3600 // 10 minutes
+        config.timeoutIntervalForResource = 3600 // 60 minutes
+        config.waitsForConnectivity = true
+        let session = URLSession(configuration: config)
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        
-        // Add authorization header if we have a token
+
         if let token = readAuthToken(), !token.isEmpty {
             request.setValue("Token \(token)", forHTTPHeaderField: "Authorization")
         }
-        
-        // Create request body with scan ID
-        let requestBody: [String: Any] = [
-            "scan_id": scanId,
-        ]
-        
+
+        let requestBody: [String: Any] = ["scan_id": scanId]
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
         } catch {
             completion(false, "Failed to serialize request body: \(error.localizedDescription)")
+            if backgroundTask != .invalid {
+                UIApplication.shared.endBackgroundTask(backgroundTask)
+            }
             return
         }
-        
-        // Log the request details
-        os_log("🚀 [SERVER PROCESS] POST %@", log: OSLog.default, type: .info, url.absoluteString)
-        os_log("📋 [SERVER PROCESS] Headers: %@", log: OSLog.default, type: .info, request.allHTTPHeaderFields?.description ?? "None")
-        os_log("📦 [SERVER PROCESS] Body: %@", log: OSLog.default, type: .info, String(data: request.httpBody ?? Data(), encoding: .utf8) ?? "None")
-        
-        // Make the API call
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error = error {
-                os_log("❌ [SERVER PROCESS] Network error: %@", log: OSLog.default, type: .error, error.localizedDescription)
-                completion(false, "Network error: \(error.localizedDescription)")
+
+        // 3. Add network monitoring
+        let monitor = NWPathMonitor()
+        let queue = DispatchQueue(label: "NetworkMonitor")
+        var isNetworkAvailable = true
+
+        monitor.pathUpdateHandler = { path in
+            isNetworkAvailable = path.status == .satisfied
+        }
+        monitor.start(queue: queue)
+
+        // 4. Implement the request with retry logic
+        func attemptRequest(retriesLeft: Int) {
+            guard isNetworkAvailable else {
+                if retriesLeft > 0 {
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
+                        attemptRequest(retriesLeft: retriesLeft - 1)
+                    }
+                    return
+                }
+                completion(false, "Network unavailable")
                 return
             }
-            
-            guard let httpResponse = response as? HTTPURLResponse else {
-                completion(false, "Invalid response type")
-                return
-            }
-            
-            let statusCode = httpResponse.statusCode
-            os_log("📥 [SERVER PROCESS] Response status: %d", log: OSLog.default, type: .info, statusCode)
-            
-            // Log response body for debugging
-            if let data = data, let responseString = String(data: data, encoding: .utf8) {
-                os_log("📥 [SERVER PROCESS] Response body: %@", log: OSLog.default, type: .info, responseString)
-            }
-            
-            // Check if the request was successful
-            if statusCode >= 200 && statusCode < 300 {
-                // Try to parse response for any additional info
-                var message = "Processing started successfully"
-                if let data = data {
-                    if let jsonResponse = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                        if let responseMessage = jsonResponse["message"] as? String {
-                            message = responseMessage
-                        } else if let status = jsonResponse["status"] as? String {
-                            message = "Processing \(status)"
+
+            let task = session.dataTask(with: request) { data, response, error in
+                // Handle network errors
+                if let error = error {
+                    os_log("❌ [SERVER PROCESS] Attempt failed: %@", log: OSLog.default, type: .error, error.localizedDescription)
+
+                    if retriesLeft > 0 {
+                        DispatchQueue.global().asyncAfter(deadline: .now() + pow(2.0, Double(4 - retriesLeft))) {
+                            attemptRequest(retriesLeft: retriesLeft - 1)
                         }
+                    } else {
+                        completion(false, "Network error: \(error.localizedDescription)")
                     }
+                    return
                 }
-                completion(true, message)
-            } else {
-                // Handle error responses
-                var errorMessage = "Server processing failed with status \(statusCode)"
-                if let data = data {
-                    if let jsonResponse = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                        if let serverMessage = jsonResponse["error"] as? String {
-                            errorMessage = serverMessage
-                        } else if let serverMessage = jsonResponse["message"] as? String {
-                            errorMessage = serverMessage
-                        } else if let detail = jsonResponse["detail"] as? String {
-                            errorMessage = detail
-                        }
+
+                // Process server response
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    completion(false, "Invalid response type")
+                    return
+                }
+
+                let statusCode = httpResponse.statusCode
+                os_log("📥 [SERVER PROCESS] Response status: %d", log: OSLog.default, type: .info, statusCode)
+
+                if statusCode >= 200 && statusCode < 300 {
+                    var message = "Processing started successfully"
+                    if let data = data,
+                       let jsonResponse = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                        message = jsonResponse["message"] as? String ?? message
                     }
+                    completion(true, message)
+                } else {
+                    var errorMessage = "Server error: \(statusCode)"
+                    if let data = data,
+                       let jsonResponse = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let serverMessage = jsonResponse["error"] as? String ?? jsonResponse["message"] as? String {
+                        errorMessage = serverMessage
+                    }
+                    completion(false, errorMessage)
                 }
-                completion(false, errorMessage)
+
+                // Cleanup
+                monitor.cancel()
+                if backgroundTask != .invalid {
+                    UIApplication.shared.endBackgroundTask(backgroundTask)
+                }
             }
-        }.resume()
+
+            // Start the task
+            task.resume()
+
+            // Log progress (for large uploads)
+            if #available(iOS 11.0, *) {
+                let progress = task.progress
+                progress.addObserver(self, forKeyPath: #keyPath(Progress.fractionCompleted), options: .new, context: nil)
+            }
+        }
+
+        // Start with 3 retries
+        attemptRequest(retriesLeft: 3)
     }
+
+    // Progress tracking (optional)
+    override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
+        if keyPath == #keyPath(Progress.fractionCompleted),
+           let progress = object as? Progress {
+            print("Upload progress: \(progress.fractionCompleted * 100)%")
+        }
+    }
+
 }
