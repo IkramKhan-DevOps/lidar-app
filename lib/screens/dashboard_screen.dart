@@ -448,7 +448,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
           const SyncAppBarAction(),
           IconButton(
             icon: _isRefreshing
-                ? const CircularProgressIndicator(color: Colors.white)
+                ? const CircularProgressIndicator(color: Colors.white,)
                 : const Icon(Icons.refresh, color: Colors.white),
             onPressed: () => setState(() {
               _fetchScans();
