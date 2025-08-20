@@ -435,6 +435,17 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     );
   }
   late AnimationController _controller;
+  bool _isLoading = false;
+
+  void _handlePress() async {
+    setState(() {
+      _isLoading = true;
+    });
+    await _fetchScans();
+    setState(() {
+      _isLoading = false;
+    });
+  }
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -446,14 +457,19 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
         actions: [
           const NetworkStatusAppBarIndicator(),
           const SyncAppBarAction(),
-          IconButton(
-            icon: _isRefreshing
-                ? const CircularProgressIndicator(color: Colors.white,)
-                : const Icon(Icons.refresh, color: Colors.white),
-            onPressed: () => setState(() {
-              _fetchScans();
-            }),
-          ),
+        IconButton(
+          icon: _isLoading
+              ? const SizedBox(
+            width: 20, // Smaller size
+            height: 20,
+            child: CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+              strokeWidth: 1.5, // Thinner stroke for compact look
+            ),
+          )
+              : const Icon(Icons.refresh, color: Colors.white, size: 24), // Match icon size
+          onPressed: _handlePress,
+        ),
           IconButton(
             icon: const Icon(Icons.view_list, color: Colors.white),
             onPressed: () => setState(() {

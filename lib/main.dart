@@ -36,6 +36,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/configs/app_routes.dart';
+import 'core/utils/navigation_helper.dart';
 
 class ModelCraftApp extends StatelessWidget {
   static const platform = MethodChannel('com.demo.channel/message');
@@ -44,6 +45,7 @@ class ModelCraftApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: NavigationHelper.navigatorKey, // ← Use the global key
       debugShowCheckedModeBanner: false,
       title: 'ModelCraft',
       theme: ThemeData(

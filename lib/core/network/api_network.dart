@@ -19,10 +19,13 @@
 
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/cupertino.dart';
 import 'package:http/http.dart' as http;
+import 'package:platform_channel_swift_demo/core/configs/app_routes.dart';
 
 import '../errors/app_exceptions.dart';
 import '../storage/auth_storage.dart';
+import '../utils/navigation_helper.dart';
 import 'api_network_base.dart';
 import 'api_urls.dart';
 
@@ -30,6 +33,10 @@ class NetworkApiService extends BaseApiService {
   // Default timeouts per operation type.
 final Duration _getTimeout = const Duration(seconds: 1800);
   final Duration _writeTimeout = const Duration(seconds: 1800);
+final Future<void> Function()? onUnauthorized;
+
+// Modify the constructor to accept the callback
+NetworkApiService({this.onUnauthorized});
 
   // -----------------------------------------------------------
   // _headers
@@ -184,7 +191,7 @@ final Duration _getTimeout = const Duration(seconds: 1800);
     }
   }
 
-  dynamic _validate(http.Response res) {
+  dynamic _validate(http.Response res) async { // Make this method async
     // Success codes we accept
     if (res.statusCode == 200 ||
         res.statusCode == 201 ||
@@ -203,6 +210,8 @@ final Duration _getTimeout = const Duration(seconds: 1800);
       case 400:
         throw BadRequestException(body);
       case 401:
+        // _redirectToLogin();
+        throw UnauthorizedException(body);
       case 403:
         throw UnauthorizedException(body);
       case 404:
@@ -228,8 +237,13 @@ final Duration _getTimeout = const Duration(seconds: 1800);
     print('Body: ${res.body}');
     print('====================');
   }
+  void _redirectToLogin() {
+    NavigationHelper.redirectToLogin(); // Call the global helper
+  }
 
-  // -----------------------------------------------------------
+
+
+// -----------------------------------------------------------
   // _validate
   // Normalizes HTTP responses:
   // - Success (200/201): decode JSON if possible, else return raw body.
