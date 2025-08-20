@@ -2225,7 +2225,7 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
         processButton.backgroundColor = UIColor.systemGray.withAlphaComponent(0.8)
         
         // Show success message
-        statusLabel.text = "✅ Scan uploaded to backend!"
+        statusLabel.text = "✅ Scan is Uploading to Backend Wait for a While!"
         
         // Close after a delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -15,9 +16,7 @@ import 'dashboard_screen.dart';
 
 class ModelDetailScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> scan;
-
   const ModelDetailScreen({super.key, required this.scan});
-
   @override
   ConsumerState<ModelDetailScreen> createState() => _ModelDetailScreenState();
 }
@@ -35,8 +34,10 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
   String? _errorDetails;
   GoogleMapController? _mapController;
   bool _hasShownNoGpsMessage = false;
-
-  // API scan support
+  String? _selectedTopViewImage;
+  LatLng? _selectedMarkerPosition;
+  late Timer _statusRefreshTimer;
+  bool _isAutoRefreshing = false;
   ScanRepository? _scanRepository;
   ScanDetailModel? _apiScanDetail;
   bool _isLoadingApiData = false;
@@ -46,13 +47,9 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
-
-    // Initialize scan repository for API calls
     _scanRepository = ScanRepository(NetworkApiService());
-
-    // Check if this scan is from API
     _isFromAPI = widget.scan['isFromAPI'] == true;
-
+    _startAutoRefreshTimer();
     if (widget.scan['metadata'] == null) {
       widget.scan['metadata'] = <String, dynamic>{
         'scan_id': widget.scan['scanID'] ?? widget.scan['id'] ?? widget.scan['folderPath']?.split('/').last ?? 'unknown',
@@ -69,23 +66,22 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
     }
     widget.scan['snapshotPath'] = widget.scan['snapshotPath'] ?? widget.scan['metadata']['snapshot_path'];
     _nameController = TextEditingController(text: widget.scan['metadata']['name'] ?? 'Unnamed Scan');
-
-    // Load data based on scan type
     if (_isFromAPI) {
       _loadApiScanData();
     } else {
       _fetchImagePaths();
       _syncStatusWithMetadata();
     }
-
     platform.setMethodCallHandler(_handleMethodCall);
   }
 
   @override
   void dispose() {
+    _statusRefreshTimer.cancel();
     _tabController.dispose();
     _nameController.dispose();
     _mapController?.dispose();
+    platform.setMethodCallHandler(null);
     super.dispose();
   }
 
@@ -94,6 +90,60 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
     final int minutes = (durationSeconds / 60).floor();
     final int seconds = (durationSeconds % 60).round();
     return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _refreshScanStatus() async {
+    if (_scanRepository == null || !mounted || _isAutoRefreshing) return;
+    if (mounted) {
+      setState(() {
+        _isAutoRefreshing = true;
+      });
+    }
+    try {
+      final scanId = widget.scan['metadata']?['scan_id'] ?? widget.scan['id'];
+      if (scanId is int || (scanId is String && int.tryParse(scanId) != null)) {
+        final scanIdInt = scanId is int ? scanId : int.parse(scanId);
+        final apiScanDetail = await _scanRepository!.getScanDetail(scanIdInt);
+        if (mounted) {
+          setState(() {
+            _apiScanDetail = apiScanDetail;
+            _status = apiScanDetail.status;
+            _statusMessage = _getApiStatusMessage(apiScanDetail.status);
+            _isAutoRefreshing = false;
+          });
+          _updateScanMetadataFromApi(apiScanDetail);
+          if (_status == 'completed' || _status == 'failed' || _status == 'uploaded') {
+            _statusRefreshTimer.cancel();
+            if (_status == 'completed') {
+              _tabController.animateTo(0); // Switch to 3D View tab
+            }
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isAutoRefreshing = false;
+          _errorDetails = e.toString();
+        });
+      }
+    }
+  }
+
+  void _startAutoRefreshTimer() {
+    if (_isFromAPI) {
+      _statusRefreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) async {
+        if (!mounted) {
+          timer.cancel();
+          return;
+        }
+        if (_status != 'completed' && _status != 'failed' && _status != 'uploaded') {
+          await _refreshScanStatus();
+        } else {
+          timer.cancel();
+        }
+      });
+    }
   }
 
   double _parseDurationSeconds(dynamic value) {
@@ -108,41 +158,45 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
 
   Future<void> _loadApiScanData() async {
     if (_scanRepository == null) return;
-
-    setState(() {
-      _isLoadingApiData = true;
-    });
-
+    if (mounted) {
+      setState(() {
+        _isLoadingApiData = true;
+      });
+    }
     try {
       final scanId = widget.scan['metadata']?['scan_id'] ?? widget.scan['id'];
       if (scanId is int || (scanId is String && int.tryParse(scanId) != null)) {
         final scanIdInt = scanId is int ? scanId : int.parse(scanId);
         final apiScanDetail = await _scanRepository!.getScanDetail(scanIdInt);
-        setState(() {
-          _apiScanDetail = apiScanDetail;
-          _status = apiScanDetail.status;
-          _statusMessage = _getApiStatusMessage(apiScanDetail.status);
-          _nameController.text = apiScanDetail.title;
-          _isLoadingApiData = false;
-        });
-
-        _updateScanMetadataFromApi(apiScanDetail);
+        if (mounted) {
+          setState(() {
+            _apiScanDetail = apiScanDetail;
+            _status = apiScanDetail.status;
+            _statusMessage = _getApiStatusMessage(apiScanDetail.status);
+            _nameController.text = apiScanDetail.title;
+            _isLoadingApiData = false;
+          });
+          _updateScanMetadataFromApi(apiScanDetail);
+          if (_status == 'completed') {
+            _tabController.animateTo(0); // Switch to 3D View tab
+          }
+        }
       } else {
         throw Exception('Invalid scan ID: $scanId');
       }
     } catch (e) {
       print('Error loading API scan data: $e');
-      setState(() {
-        _isLoadingApiData = false;
-        _errorDetails = e.toString();
-        _statusMessage = 'Failed to load scan details from server.';
-      });
-
+      if (mounted) {
+        setState(() {
+          _isLoadingApiData = false;
+          _errorDetails = e.toString();
+          _statusMessage = 'Failed to load scan details from server.';
+        });
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to load scan details: ${e.toString()}',
-                style: const TextStyle(color: Colors.white, fontSize: 14)),
+            content: Text('Failed to load scan details: ${e.toString()}', style: const TextStyle(color: Colors.white, fontSize: 14)),
             backgroundColor: Colors.red[800],
             duration: const Duration(seconds: 5),
             behavior: SnackBarBehavior.floating,
@@ -157,22 +211,27 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
     final coordinates = apiData.gpsPoints.map((gps) => [gps.latitude, gps.longitude]).toList();
     final dataSizeMb = apiData.dataSizeMb;
     final modelSizeBytes = (dataSizeMb * 1024 * 1024).toInt();
-
-    widget.scan['metadata'] = {
-      ...widget.scan['metadata'],
-      'scan_id': apiData.id,
-      'name': apiData.title,
-      'description': apiData.description,
-      'duration_seconds': apiData.duration,
-      'area_covered': apiData.areaCovered,
-      'height': apiData.height,
-      'model_size_bytes': modelSizeBytes,
-      'coordinates': coordinates,
-      'image_count': apiData.totalImages,
-      'status': apiData.status,
-      'created_at': apiData.createdAt,
-      'updated_at': apiData.updatedAt,
-    };
+    if (mounted) {
+      setState(() {
+        widget.scan['metadata'] = {
+          ...widget.scan['metadata'],
+          'scan_id': apiData.id,
+          'name': apiData.title,
+          'description': apiData.description,
+          'duration_seconds': apiData.duration,
+          'area_covered': apiData.areaCovered,
+          'height': apiData.height,
+          'model_size_bytes': modelSizeBytes,
+          'coordinates': coordinates,
+          'image_count': apiData.totalImages,
+          'status': apiData.status,
+          'created_at': apiData.createdAt,
+          'updated_at': apiData.updatedAt,
+        };
+        _status = apiData.status;
+        _statusMessage = _getApiStatusMessage(apiData.status);
+      });
+    }
   }
 
   String _getApiStatusMessage(String status) {
@@ -180,11 +239,11 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       case 'completed':
         return 'Scan completed and available for viewing';
       case 'processing':
-        return 'Scan is being processed on the server';
+        return 'Scan is being processed on the server. This may take several minutes.';
       case 'uploaded':
         return 'Scan uploaded successfully';
       case 'failed':
-        return 'Scan processing failed';
+        return 'SScan processing failed Kindly Scan Properly and Try again.';
       case 'pending':
       default:
         return 'Scan is pending processing';
@@ -195,38 +254,42 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
     try {
       final folderPath = widget.scan['folderPath']?.toString();
       if (folderPath == null) throw Exception('Invalid folder path');
-
       final metadataResult = await platform.invokeMethod('getScanMetadata', {'folderPath': folderPath});
       final metadata = (metadataResult as Map<dynamic, dynamic>?)?.cast<String, dynamic>() ?? widget.scan['metadata'];
       final status = metadata['status']?.toString() ?? 'pending';
       final hasUsdz = metadata['hasUSDZ'] == true;
-
-      setState(() {
-        widget.scan['metadata'] = <String, dynamic>{
-          ...widget.scan['metadata'],
-          ...metadata,
-        };
-        _status = status;
-        _statusMessage = _getStatusMessage(status);
-        widget.scan['usdzPath'] = hasUsdz ? '$folderPath/model.usdz' : null;
-      });
-
+      if (mounted) {
+        setState(() {
+          widget.scan['metadata'] = <String, dynamic>{
+            ...widget.scan['metadata'],
+            ...metadata,
+          };
+          _status = status;
+          _statusMessage = _getStatusMessage(status);
+          widget.scan['usdzPath'] = hasUsdz ? '$folderPath/model.usdz' : null;
+        });
+      }
       if (hasUsdz && status != 'uploaded') {
         await platform.invokeMethod('updateScanStatus', {'folderPath': folderPath, 'status': 'uploaded'});
-        setState(() {
-          _status = 'uploaded';
-          _statusMessage = 'Tap to view 3D model';
-          widget.scan['metadata']['status'] = 'uploaded';
-          widget.scan['usdzPath'] = '$folderPath/model.usdz';
-        });
+        if (mounted) {
+          setState(() {
+            _status = 'uploaded';
+            _statusMessage = 'Tap to view 3D model';
+            widget.scan['metadata']['status'] = 'uploaded';
+            widget.scan['usdzPath'] = '$folderPath/model.usdz';
+            _tabController.animateTo(0); // Switch to 3D View tab
+          });
+        }
       }
     } catch (e) {
       print('Error syncing status: $e');
-      setState(() {
-        _status = 'pending';
-        _statusMessage = 'Data has not been processed. Tap to process the model.';
-        _errorDetails = e.toString();
-      });
+      if (mounted) {
+        setState(() {
+          _status = 'pending';
+          _statusMessage = 'Data has not been processed. Tap to process the model.';
+          _errorDetails = e.toString();
+        });
+      }
     }
   }
 
@@ -246,63 +309,77 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
     try {
       final result = await platform.invokeMethod('getScanImages', {'folderPath': widget.scan['folderPath']});
       if (result is List) {
-        setState(() {
-          imagePaths = List<String>.from(result.map((e) => e.toString()));
-        });
+        if (mounted) {
+          setState(() {
+            imagePaths = List<String>.from(result.map((e) => e.toString()));
+          });
+        }
       } else {
+        if (mounted) {
+          setState(() {
+            imagePaths = [];
+          });
+        }
+      }
+    } on PlatformException catch (e) {
+      if (mounted) {
         setState(() {
           imagePaths = [];
         });
       }
-    } on PlatformException catch (e) {
-      setState(() {
-        imagePaths = [];
-      });
     }
   }
 
   Future<void> _handleMethodCall(MethodCall call) async {
+    if (!mounted) return;
     if (call.method == 'processingComplete') {
       final folderPath = call.arguments['usdzPath']?.toString();
       if (folderPath != null && folderPath.contains(widget.scan['folderPath'])) {
-        setState(() {
-          _status = 'uploaded';
-          _statusMessage = 'Tap to view 3D model';
-          _isProcessing = false;
-          widget.scan['metadata']['status'] = 'uploaded';
-          widget.scan['usdzPath'] = call.arguments['usdzPath'];
-          if (call.arguments['snapshotPath'] != null) {
-            widget.scan['snapshotPath'] = call.arguments['snapshotPath'];
-          }
-        });
+        if (mounted) {
+          setState(() {
+            _status = 'uploaded';
+            _statusMessage = 'Tap to view 3D model';
+            _isProcessing = false;
+            widget.scan['metadata']['status'] = 'uploaded';
+            widget.scan['usdzPath'] = call.arguments['usdzPath'];
+            if (call.arguments['snapshotPath'] != null) {
+              widget.scan['snapshotPath'] = call.arguments['snapshotPath'];
+            }
+            _tabController.animateTo(0); // Switch to 3D View tab
+          });
+        }
       }
     } else if (call.method == 'scanComplete') {
       final folderPath = call.arguments['folderPath']?.toString();
       if (folderPath != null && folderPath == widget.scan['folderPath']) {
-        setState(() {
-          widget.scan['metadata'] = <String, dynamic>{
-            ...widget.scan['metadata'],
-            'scan_id': call.arguments['scanID'] ?? widget.scan['metadata']['scan_id'],
-            'name': call.arguments['name'] ?? widget.scan['metadata']['name'],
-            'timestamp': call.arguments['timestamp'] ?? widget.scan['metadata']['timestamp'],
-            'location_name': call.arguments['locationName'] ?? widget.scan['metadata']['location_name'],
-            'coordinates': call.arguments['coordinates'] ?? widget.scan['metadata']['coordinates'],
-            'image_count': call.arguments['imageCount'] ?? widget.scan['metadata']['image_count'],
-            'duration_seconds': call.arguments['durationSeconds'] ?? widget.scan['metadata']['duration_seconds'],
-            'status': 'pending',
-          };
-          _nameController.text = widget.scan['metadata']['name'];
-          _status = 'pending';
-          _statusMessage = 'Data has not been processed. Tap to process the model.';
-        });
-        await _fetchImagePaths();
+        if (mounted) {
+          setState(() {
+            widget.scan['metadata'] = <String, dynamic>{
+              ...widget.scan['metadata'],
+              'scan_id': call.arguments['scanID'] ?? widget.scan['metadata']['scan_id'],
+              'name': call.arguments['name'] ?? widget.scan['metadata']['name'],
+              'timestamp': call.arguments['timestamp'] ?? widget.scan['metadata']['timestamp'],
+              'location_name': call.arguments['locationName'] ?? widget.scan['metadata']['location_name'],
+              'coordinates': call.arguments['coordinates'] ?? widget.scan['metadata']['coordinates'],
+              'image_count': call.arguments['imageCount'] ?? widget.scan['metadata']['image_count'],
+              'duration_seconds': call.arguments['durationSeconds'] ?? widget.scan['metadata']['duration_seconds'],
+              'status': 'pending',
+            };
+            _nameController.text = widget.scan['metadata']['name'];
+            _status = 'pending';
+            _statusMessage = 'Data has not been processed. Tap to process the model.';
+          });
+          await _fetchImagePaths();
+        }
       }
     } else if (call.method == 'updateProcessingStatus') {
       final status = call.arguments['status']?.toString() ?? 'processing';
-      setState(() {
-        _isProcessing = true;
-        _statusMessage = _getProcessingStatusMessage(status);
-      });
+      if (mounted) {
+        setState(() {
+          _isProcessing = true;
+          _statusMessage = _getProcessingStatusMessage(status);
+        });
+      }
     } else if (call.method == 'closeARModule' || call.method == 'dismiss') {
       if (mounted) Navigator.of(context).pop();
     }
@@ -321,50 +398,55 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
   }
 
   Future<void> _previewUSDZ() async {
-    if (_isProcessing) return;
-
+    if (_isProcessing || !mounted) return;
     final networkState = ref.read(networkStateProvider);
     if (!networkState.isOnline && _status != 'uploaded') {
-      throw Exception('For processing, you need to connect to the internet.');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('For processing, you need to connect to the internet.', style: TextStyle(color: Colors.white, fontSize: 14)),
+            backgroundColor: Colors.red[800],
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+      return;
     }
-
     if (_status == 'uploaded' && widget.scan['usdzPath'] != null) {
       try {
         await platform.invokeMethod('openUSDZ', {'path': widget.scan['usdzPath']});
       } on PlatformException catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Couldn’t open the 3D model. Please try again.', style: TextStyle(color: Colors.white, fontSize: 14)),
-            backgroundColor: Colors.red[800],
-            duration: const Duration(seconds: 3),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          ),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('Couldn\'t open the 3D model. Please try again.', style: TextStyle(color: Colors.white, fontSize: 14)),
+              backgroundColor: Colors.red[800],
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
       }
     } else {
       try {
         await _processModel();
       } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('For processing, you need to connect to the internet.', style: TextStyle(color: Colors.white, fontSize: 14)),
-            backgroundColor: Colors.red[800],
-            duration: const Duration(seconds: 3),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          ),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('For processing, you need to connect to the internet.', style: TextStyle(color: Colors.white, fontSize: 14)),
+              backgroundColor: Colors.red[800],
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
       }
     }
   }
 
   Future<void> _processModel() async {
     if (_isProcessing) return;
-
     final status = widget.scan['metadata']['status'] ?? 'pending';
     final isApiScan = _isFromAPI || widget.scan['isFromAPI'] == true;
-
     if (isApiScan) {
       await _processModelOnServer();
     } else {
@@ -373,16 +455,17 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
   }
 
   Future<void> _processModelOnServer() async {
-    setState(() {
-      _isProcessing = true;
-      _statusMessage = 'Starting server processing...';
-      _errorDetails = null;
-    });
-
+    if (!mounted) return;
+    if (mounted) {
+      setState(() {
+        _isProcessing = true;
+        _statusMessage = 'Starting server processing...';
+        _errorDetails = null;
+      });
+    }
     try {
       final scanIdStr = widget.scan['metadata']['id'] ?? widget.scan['metadata']['scan_id'] ?? widget.scan['id'];
       int scanId;
-
       if (scanIdStr is int) {
         scanId = scanIdStr;
       } else if (scanIdStr is String) {
@@ -390,17 +473,9 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       } else {
         throw PlatformException(code: 'INVALID_SCAN_ID', message: 'Invalid scan ID: $scanIdStr');
       }
-
       if (scanId == 0) {
         throw PlatformException(code: 'INVALID_SCAN_ID', message: 'Scan ID is required for server processing');
       }
-
-      // First update: Show we're getting file size
-      setState(() {
-        _statusMessage = 'Calculating file size...';
-      });
-
-      // Get the file size (either from API data or local metadata)
       double fileSizeMB;
       if (_apiScanDetail?.dataSizeMb != null) {
         fileSizeMB = _apiScanDetail!.dataSizeMb;
@@ -408,113 +483,87 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
         final modelSizeBytes = widget.scan['metadata']['model_size_bytes'] ?? 0;
         fileSizeMB = (modelSizeBytes / (1024 * 1024));
       }
-
-      // Estimate processing time (adjust these factors based on your server's actual performance)
-      // Example: Assume server can process 50MB in 2 minutes
       final estimatedMinutes = (fileSizeMB / 50.0) * 2.0;
       final estimatedTimeText = estimatedMinutes.toStringAsFixed(1);
-
-      setState(() {
-        _statusMessage = 'Sending processing request to server...\nEstimated processing time: ~$estimatedTimeText minutes';
-      });
-
+      if (mounted) {
+        setState(() {
+          _statusMessage = 'Sending processing request to server...\nEstimated time: ~$estimatedTimeText minutes';
+        });
+      }
       final result = await platform.invokeMethod('processModelOnServer', {
         'scanId': scanId,
       });
-
-      if (result['success'] == true) {
-        setState(() {
-          _isProcessing = false;
-          _status = 'processing';
-          _statusMessage = result['message'] ?? 'Processing started on server. Please check back later.';
-          widget.scan['metadata']['status'] = 'processing';
-        });
-
+      if (result['success'] == true && mounted) {
+        if (mounted) {
+          setState(() {
+            _isProcessing = false;
+            _status = 'processing';
+            _statusMessage = 'Processing started on server.';
+            widget.scan['metadata']['status'] = 'processing';
+          });
+        }
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(
-                  result['message'] ?? 'Processing started successfully on server!',
-                  style: const TextStyle(color: Colors.white, fontSize: 14)
-              ),
+              content: Text(result['message'] ?? 'Processing started successfully!', style: const TextStyle(color: Colors.white, fontSize: 14)),
               backgroundColor: Colors.green[800],
               duration: const Duration(seconds: 3),
-              behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
           );
         }
       } else {
-        throw PlatformException(
-            code: 'PROCESSING_FAILED',
-            message: result['message'] ?? 'Failed to start server processing'
-        );
+        throw PlatformException(code: 'PROCESSING_FAILED', message: result['message'] ?? 'Failed to start server processing');
       }
     } on PlatformException catch (e) {
-      String errorMessage = "Couldn't start server processing. Please try again";
-      if (e.code == 'PROCESSING_FAILED') {
-        errorMessage = e.message ?? errorMessage;
-      } else if (e.code == 'INVALID_SCAN_ID') {
-        errorMessage = 'Invalid scan ID. Cannot process this scan.';
-      }
-
-      setState(() {
-        _isProcessing = false;
-        _status = 'failed';
-        _statusMessage = 'Server processing failed: Tap to retry.';
-        _errorDetails = e.message;
-        widget.scan['metadata']['status'] = 'failed';
-      });
-
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(errorMessage, style: const TextStyle(color: Colors.white, fontSize: 14)),
-            backgroundColor: Colors.red[800],
-            duration: const Duration(seconds: 3),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          ),
-        );
+        setState(() {
+          _isProcessing = false;
+          _status = 'failed';
+          _statusMessage = 'Scan processing failed Kindly Scan Properly and Try again.';
+          _errorDetails = e.message;
+          widget.scan['metadata']['status'] = 'failed';
+        });
       }
     }
   }
-  Future<void> _processModelLocally() async {
-    setState(() {
-      _isProcessing = true;
-      _statusMessage = 'Processing model...';
-      _errorDetails = null;
-    });
 
+  Future<void> _processModelLocally() async {
+    if (mounted) {
+      setState(() {
+        _isProcessing = true;
+        _statusMessage = 'Processing model...';
+        _errorDetails = null;
+      });
+    }
     try {
       final folderPath = widget.scan['folderPath']?.toString();
       if (folderPath == null) {
         throw PlatformException(code: 'INVALID_PATH', message: 'Invalid folder path');
       }
-
       final zipSizeResult = await platform.invokeMethod('getZipSize', {'folderPath': folderPath});
       final zipSizeMB = (zipSizeResult['zipSizeBytes'] as num) / (1024 * 1024);
       final estimatedMinutes = (zipSizeMB / 50.0) * 2.0;
       final estimatedTimeText = estimatedMinutes.toStringAsFixed(1);
-
-      setState(() {
-        _statusMessage = 'Processing model (~$estimatedTimeText minutes)...';
-      });
-
+      if (mounted) {
+        setState(() {
+          _statusMessage = 'Processing model (~$estimatedTimeText minutes)...';
+        });
+      }
       final result = await platform.invokeMethod('processScan', {'folderPath': folderPath});
-
-      setState(() {
-        _status = 'uploaded';
-        _statusMessage = 'Tap to view 3D model';
-        _isProcessing = false;
-        widget.scan['metadata']['status'] = 'uploaded';
-        widget.scan['usdzPath'] = result['usdzPath'];
-        widget.scan['metadata']['model_size_bytes'] = result['modelSizeBytes'];
-        if (result['snapshotPath'] != null) {
-          widget.scan['snapshotPath'] = result['snapshotPath'];
-        }
-      });
-
+      if (mounted) {
+        setState(() {
+          _status = 'uploaded';
+          _statusMessage = 'Tap to view 3D model';
+          _isProcessing = false;
+          widget.scan['metadata']['status'] = 'uploaded';
+          widget.scan['usdzPath'] = result['usdzPath'];
+          widget.scan['metadata']['model_size_bytes'] = result['modelSizeBytes'];
+          if (result['snapshotPath'] != null) {
+            widget.scan['snapshotPath'] = result['snapshotPath'];
+          }
+          _tabController.animateTo(0); // Switch to 3D View tab
+        });
+      }
       await platform.invokeMethod('updateScanStatus', {'folderPath': folderPath, 'status': 'uploaded'});
     } on PlatformException catch (e) {
       String errorMessage = "Couldn't process the model. Please try again.";
@@ -529,55 +578,46 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       } else if (e.code == 'SERVER_UNAVAILABLE') {
         errorMessage = 'Server is unavailable. Please try again later.';
       }
-
-      setState(() {
-        _isProcessing = false;
-        _status = 'failed';
-        _statusMessage = 'Model processing failed: $errorMessage Tap to retry.';
-        _errorDetails = e.message;
-        widget.scan['metadata']['status'] = 'failed';
-      });
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+          _status = 'failed';
+          _statusMessage = 'Model processing failed: $errorMessage Tap to retry.';
+          _errorDetails = e.message;
+          widget.scan['metadata']['status'] = 'failed';
+        });
+      }
       await platform.invokeMethod('updateScanStatus', {'folderPath': widget.scan['folderPath'], 'status': 'failed'});
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(errorMessage, style: const TextStyle(color: Colors.white, fontSize: 14)),
-          backgroundColor: Colors.red[800],
-          duration: const Duration(seconds: 3),
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMessage, style: const TextStyle(color: Colors.white, fontSize: 14)),
+            backgroundColor: Colors.red[800],
+            duration: const Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+        );
+      }
     }
   }
 
   Future<void> _deleteModel() async {
-    print("START");
     try {
       final folderPath = widget.scan['folderPath']?.toString();
       final scanId = widget.scan['metadata']['scan_id'] ?? widget.scan['id'];
       bool deleteSuccess = true;
-
-      // Handle API deletion for API scans
       if (_isFromAPI && scanId != null) {
-        print("3");
         final scanIdInt = scanId is int ? scanId : int.tryParse(scanId.toString()) ?? 0;
         if (scanIdInt > 0) {
-          // print type of scanId
-            bool? isDeleted = await _scanRepository?.deleteScan(
-              scanId, // Ensure scanId is a string
-            );
-
-            if (isDeleted == true) {
-
-            }else{
-            }
-
+          bool? isDeleted = await _scanRepository?.deleteScan(scanId);
+          if (isDeleted != true) {
+            deleteSuccess = false;
+          }
         } else {
           deleteSuccess = false;
         }
       }
-
-      // Handle local deletion if folderPath exists
       if (folderPath != null && folderPath.isNotEmpty) {
         final result = await platform.invokeMethod('deleteScan', {'path': folderPath});
         if (result != 'Scan deleted successfully' && result != true) {
@@ -585,7 +625,6 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
           throw PlatformException(code: 'DELETE_FAILED', message: 'Local deletion failed: $result');
         }
       }
-
       if (deleteSuccess) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -622,20 +661,6 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       if (_isFromAPI && widget.scan['id'] != null) {
         final scanIdInt = widget.scan['id'] is int ? widget.scan['id'] : int.tryParse(widget.scan['id'].toString()) ?? 0;
         if (scanIdInt > 0) {
-          // Download from API
-          // final response = await _scanRepository.getAPI(
-          //   APIUrl.scanDownloadById(scanIdInt), // Use the correct download endpoint
-          //   true, // isToken: true to include auth token
-          // );
-
-          // Since the endpoint returns a ZIP file, we expect raw bytes, not JSON
-          // final bytes = response is String ? response.codeUnits : response as List<int>;
-          // final tempDir = Directory.systemTemp;
-          // final tempZipPath = '${tempDir.path}/scan_$scanIdInt.zip';
-          // final tempZipFile = File(tempZipPath);
-          // await tempZipFile.writeAsBytes(bytes);
-
-          // Notify user of success
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
@@ -647,25 +672,18 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
               ),
             );
           }
-
-          // Optionally, trigger a native share or save dialog
-          // await platform.invokeMethod('shareFile', {'path': tempZipPath});
         } else {
           throw Exception('Invalid scan ID for API download');
         }
       } else {
-        // Local download
         final folderPath = widget.scan['folderPath']?.toString();
         if (folderPath == null || folderPath.isEmpty) {
           throw Exception('Folder path is null or empty');
         }
-
         final result = await platform.invokeMethod('downloadZipFile', {'folderPath': folderPath});
-
         if (result != 'Zip file downloaded successfully' && result != true) {
           throw Exception('Local download failed: $result');
         }
-
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -767,20 +785,24 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
                   'folderPath': widget.scan['folderPath'],
                   'name': newName,
                 });
-                setState(() {
-                  widget.scan['metadata']['name'] = newName;
-                });
+                if (mounted) {
+                  setState(() {
+                    widget.scan['metadata']['name'] = newName;
+                  });
+                }
                 Navigator.pop(context);
               } on PlatformException catch (e) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: const Text('Couldn’t update the project name. Please try again.', style: TextStyle(color: Colors.white, fontSize: 14)),
-                    backgroundColor: Colors.red[800],
-                    duration: const Duration(seconds: 3),
-                    behavior: SnackBarBehavior.floating,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  ),
-                );
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: const Text('Couldn’t update the project name. Please try again.', style: TextStyle(color: Colors.white, fontSize: 14)),
+                      backgroundColor: Colors.red[800],
+                      duration: const Duration(seconds: 3),
+                      behavior: SnackBarBehavior.floating,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                  );
+                }
                 Navigator.pop(context);
               }
             },
@@ -795,12 +817,10 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
     final rawCoordinates = widget.scan['metadata']['coordinates'] as List<dynamic>?;
     final defaultPosition = const LatLng(0.0, 0.0);
     const defaultZoom = 2.0;
-
     List<LatLng> points = [];
     Map<String, LatLng>? bounds;
     LatLng center = defaultPosition;
     double zoom = defaultZoom;
-
     if (rawCoordinates != null && rawCoordinates.isNotEmpty) {
       final coordinates = rawCoordinates
           .map((coord) {
@@ -811,19 +831,16 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       })
           .whereType<List<double>>()
           .toList();
-
       points = coordinates
           .map((coord) => LatLng(coord[0], coord[1]))
           .where((point) => point.latitude != 0.0 && point.longitude != 0.0)
           .toList();
-
       if (points.isNotEmpty) {
         bounds = _calculateBounds(points);
         center = bounds['center'] as LatLng;
         zoom = 15.0;
       }
     }
-
     final polylines = points.isNotEmpty
         ? <Polyline>{
       Polyline(
@@ -834,17 +851,26 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       ),
     }
         : <Polyline>{};
-
     final markers = points.isNotEmpty
         ? <Marker>{
       Marker(
         markerId: const MarkerId('start_point'),
         position: points.first,
         icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+        onTap: () {
+          final topViewImage = _apiScanDetail?.pointCloud?.topViewImage;
+          if (topViewImage != null && topViewImage.isNotEmpty) {
+            if (mounted) {
+              setState(() {
+                _selectedTopViewImage = topViewImage;
+                _selectedMarkerPosition = points.first;
+              });
+            }
+          }
+        },
       ),
     }
         : <Marker>{};
-
     return Stack(
       children: [
         ClipRRect(
@@ -893,11 +919,58 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
               mini: true,
               backgroundColor: Colors.blue,
               onPressed: () {
-                setState(() {
-                  _isFullScreenMap = true;
-                });
+                if (mounted) {
+                  setState(() {
+                    _isFullScreenMap = true;
+                  });
+                }
               },
               child: const Icon(Icons.fullscreen, size: 20),
+            ),
+          ),
+        if (_selectedTopViewImage != null && _selectedMarkerPosition != null)
+          Positioned(
+            top: 16,
+            right: 16,
+            child: GestureDetector(
+              onTap: () {
+                if (mounted) {
+                  setState(() {
+                    _selectedTopViewImage = null;
+                    _selectedMarkerPosition = null;
+                  });
+                }
+              },
+              child: Container(
+                width: 150,
+                height: 150,
+                decoration: BoxDecoration(
+                  color: Colors.black87,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.white, width: 2),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: Image.network(
+                    _selectedTopViewImage!,
+                    fit: BoxFit.cover,
+                    loadingBuilder: (context, child, loadingProgress) {
+                      if (loadingProgress == null) return child;
+                      return Center(
+                        child: CircularProgressIndicator(
+                          value: loadingProgress.expectedTotalBytes != null
+                              ? loadingProgress.cumulativeBytesLoaded / loadingProgress.expectedTotalBytes!
+                              : null,
+                        ),
+                      );
+                    },
+                    errorBuilder: (context, error, stackTrace) => const Icon(
+                      Icons.error,
+                      color: Colors.red,
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
       ],
@@ -909,21 +982,18 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
     double maxLat = points.first.latitude;
     double minLng = points.first.longitude;
     double maxLng = points.first.longitude;
-
     for (var point in points) {
       if (point.latitude < minLat) minLat = point.latitude;
       if (point.latitude > maxLat) maxLat = point.latitude;
       if (point.longitude < minLng) minLng = point.longitude;
       if (point.longitude > maxLng) maxLng = point.longitude;
     }
-
     final southwest = LatLng(minLat, minLng);
     final northeast = LatLng(maxLat, maxLng);
     final center = LatLng(
       (minLat + maxLat) / 2,
       (minLng + maxLng) / 2,
     );
-
     return {
       'southwest': southwest,
       'northeast': northeast,
@@ -941,9 +1011,7 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       final sizeMB = (modelSizeBytes / (1024 * 1024));
       modelSizeMB = sizeMB.toStringAsFixed(1);
     }
-
     final imageCount = _apiScanDetail?.totalImages.toString() ?? widget.scan['metadata']['image_count']?.toString() ?? '0';
-
     String duration;
     if (_apiScanDetail?.duration != null) {
       final durationSeconds = _apiScanDetail!.duration.toDouble();
@@ -952,7 +1020,6 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       final durationSecondsValue = _parseDurationSeconds(widget.scan['metadata']['duration_seconds']);
       duration = _formatDuration(durationSecondsValue);
     }
-
     String areaCovered;
     String height;
     if (_apiScanDetail?.areaCovered != null) {
@@ -960,13 +1027,11 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
     } else {
       areaCovered = '0.0';
     }
-
     if (_apiScanDetail?.height != null) {
       height = _apiScanDetail!.height.toStringAsFixed(2);
     } else {
       height = '0.0';
     }
-
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
@@ -1007,15 +1072,13 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
   }
 
   Widget _build3DViewCard() {
-    final networkState = ref.watch(networkStateProvider);
+    final networkState = ref.read(networkStateProvider);
     final isOnline = networkState.isOnline;
     final status = widget.scan['metadata']['status'] ?? 'pending';
     final isApiScan = _isFromAPI || widget.scan['isFromAPI'] == true;
-    final scanID = widget.scan['metadata']['scan_id'] ?? widget.scan['id'];
 
-    // Show Offline Mode container immediately if not online
-    if (!isOnline) {
-      print("Offline Mode");
+    // Offline mode
+    if (!isOnline && status != 'uploaded') {
       return Container(
         height: 250,
         margin: const EdgeInsets.symmetric(vertical: 10),
@@ -1029,99 +1092,59 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(
-                Icons.wifi_off_rounded,
-                color: Colors.orange,
-                size: 48,
-              ),
+              Icon(Icons.wifi_off_rounded, color: Colors.orange, size: 48),
               SizedBox(height: 16),
-              Text(
-                'Offline Mode',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-                textAlign: TextAlign.center,
-              ),
+              Text('Offline Mode', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
               SizedBox(height: 8),
-              Text(
-                'Connect to the internet to process and view 3D models.',
-                style: TextStyle(
-                  color: Colors.white70,
-                  fontSize: 14,
-                ),
-                textAlign: TextAlign.center,
-              ),
+              Text('Connect to the internet to process and view 3D models.', style: TextStyle(color: Colors.white70, fontSize: 14)),
             ],
           ),
         ),
       );
     }
 
-    // For completed API scans with model URL
+    // API scan with completed status
     final processedModelUrl = _apiScanDetail?.pointCloud?.processedModel;
     final hasProcessedModel = processedModelUrl != null && processedModelUrl.isNotEmpty;
     if (isApiScan && status == 'completed' && hasProcessedModel) {
-      final scanId = widget.scan['metadata']['id'].toString(); // Convert int to String
-      return Container(
-        height: 250,
-        margin: const EdgeInsets.symmetric(vertical: 10),
-        child: GestureDetector(
-          onTap: () {
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (context) => ModelViewerScreen(
-                  modelUrl: processedModelUrl,
-                  modelName: widget.scan['metadata']['name'] ?? 'Unnamed Scan',
-                  scanId:scanId,
-                ),
+      final scanId = widget.scan['metadata']['id'].toString();
+      return GestureDetector(
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => ModelViewerScreen(
+                modelUrl: processedModelUrl,
+                modelName: widget.scan['metadata']['name'] ?? 'Unnamed Scan',
+                scanId: scanId,
               ),
-            );
-          },
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.green.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.green.withOpacity(0.3), width: 1),
             ),
-            child: const Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    Icons.view_in_ar,
-                    color: Colors.green,
-                    size: 50,
-                  ),
-                  SizedBox(height: 16),
-                  Text(
-                    '3D Model Ready',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    'Tap to view processed model',
-                    style: TextStyle(
-                      color: Colors.white70,
-                      fontSize: 14,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
+          );
+        },
+        child: Container(
+          height: 250,
+          margin: const EdgeInsets.symmetric(vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.green.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.green.withOpacity(0.3), width: 1),
+          ),
+          child: const Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.view_in_ar, color: Colors.green, size: 50),
+                SizedBox(height: 16),
+                Text('3D Model Ready', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                SizedBox(height: 8),
+                Text('Tap to view processed model', style: TextStyle(color: Colors.white70, fontSize: 14)),
+              ],
             ),
           ),
         ),
       );
     }
 
-    // For uploaded scans with local model files
+    // Local scan with uploaded status
     final snapshotPath = widget.scan['snapshotPath'];
     if (status == 'uploaded' && snapshotPath != null && File(snapshotPath).existsSync()) {
       return Container(
@@ -1151,69 +1174,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       );
     }
 
-    // For pending API scans
-    if (isApiScan && status == 'pending') {
-      return GestureDetector(
-        onTap: _previewUSDZ,
-        child: Container(
-          height: 250,
-          margin: const EdgeInsets.symmetric(vertical: 10),
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: Colors.blue.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.blue.withOpacity(0.3), width: 1),
-          ),
-          child: Center(
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                SizedBox(
-                  width: 40,
-                  height: 40,
-                  child: _isProcessing
-                      ? const CircularProgressIndicator(valueColor: AlwaysStoppedAnimation<Color>(Colors.blue), strokeWidth: 4)
-                      : const Icon(
-                    Icons.model_training,
-                    color: Colors.blue,
-                    size: 40,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Process 3D Model',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _statusMessage,
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 14,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
-    // For failed API scans
-    if (isApiScan && status == 'failed') {
-      print("Is API Scan and Process is Failed");
+    // Failed API or local scan
+    if (status == 'failed') {
       return GestureDetector(
         onTap: _previewUSDZ,
         child: Container(
@@ -1226,38 +1188,22 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
             border: Border.all(color: Colors.red.withOpacity(0.3), width: 1),
           ),
           child: Center(
-            child: Row(
+            child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const Icon(
-                  Icons.error_outline,
-                  color: Colors.red,
-                  size: 40,
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Processing Failed',
-                        style: TextStyle(
-                          color: Colors.red,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _statusMessage,
-                        style: const TextStyle(
-                          color: Colors.redAccent,
-                          fontSize: 14,
-                        ),
-                      ),
-                    ],
+                const Icon(Icons.error_outline, color: Colors.red, size: 50),
+                const SizedBox(height: 16),
+                const Text('Processing Failed', style: TextStyle(color: Colors.red, fontSize: 18, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                Text(_statusMessage, style: const TextStyle(color: Colors.redAccent, fontSize: 14), textAlign: TextAlign.center),
+                const SizedBox(height: 16),
+                ElevatedButton(
+                  onPressed: _previewUSDZ,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red[800],
+                    foregroundColor: Colors.white,
                   ),
+                  child: const Text('Retry Processing'),
                 ),
               ],
             ),
@@ -1266,162 +1212,65 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       );
     }
 
-    // For processing API scans
-    if (isApiScan && status == 'processing') {
-      print("Is API Scan and Process is Processing");
-      return FutureBuilder(
-        future: _scanRepository!.getScanDetail(scanID),
-        builder: (context, asyncSnapshot) {
-          if (asyncSnapshot.connectionState == ConnectionState.waiting) {
-            return Container(
-              height: 250,
-              margin: const EdgeInsets.symmetric(vertical: 10),
-              child: const Center(
-                child: CircularProgressIndicator(valueColor: AlwaysStoppedAnimation<Color>(Colors.blue), strokeWidth: 4),
-              ),
-            );
-          }
-
-          if (asyncSnapshot.hasError) {
-            return Container(
-              height: 250,
-              margin: const EdgeInsets.symmetric(vertical: 10),
-              child: Center(
-                child: Text(
-                  'Error loading model: ${asyncSnapshot.error}',
-                  style: const TextStyle(color: Colors.red, fontSize: 16),
-                ),
-              ),
-            );
-          }
-          if (!asyncSnapshot.hasData || asyncSnapshot.data == null) {
-            return Container(
-              height: 250,
-              margin: const EdgeInsets.symmetric(vertical: 10),
-              child: const Center(
-                child: Text(
-                  'No model data available',
-                  style: TextStyle(color: Colors.white70, fontSize: 16),
-                ),
-              ),
-            );
-          }
-
-          final _data = asyncSnapshot.data;
-          print(_data);
-          return Container(
-            height: 250,
-            margin: const EdgeInsets.symmetric(vertical: 10),
-            child: GestureDetector(
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => ModelViewerScreen(
-                      modelUrl: _data?.pointCloud?.processedModel ?? '',
-                      modelName: widget.scan['metadata']['name'] ?? 'Unnamed Scan',
-                      scanId:widget.scan['metadata']['id'].toString(),
-
-                    ),
-                  ),
-                );
-              },
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.green.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.green.withOpacity(0.3), width: 1),
-                ),
-                child: const Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.view_in_ar,
-                        color: Colors.green,
-                        size: 50,
-                      ),
-                      SizedBox(height: 16),
-                      Text(
-                        '3D Model Ready',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                      SizedBox(height: 8),
-                      Text(
-                        'Tap to view processed model',
-                        style: TextStyle(
-                          color: Colors.white70,
-                          fontSize: 14,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          );
-        },
-      );
+    // Processing or pending states for API and local scans
+    final double fileSizeMB;
+    if (_apiScanDetail?.dataSizeMb != null) {
+      fileSizeMB = _apiScanDetail!.dataSizeMb;
+    } else {
+      final modelSizeBytes = widget.scan['metadata']['model_size_bytes'] ?? 0;
+      fileSizeMB = (modelSizeBytes / (1024 * 1024));
     }
-
-    // For local scans in pending or failed state
+    final estimatedMinutes = (fileSizeMB / 50.0) * 2.0;
+    final estimatedTimeText = estimatedMinutes.toStringAsFixed(1);
     return GestureDetector(
-      onTap: _previewUSDZ,
+      onTap: status == 'pending' ? _previewUSDZ : null,
       child: Container(
         height: 250,
         margin: const EdgeInsets.symmetric(vertical: 10),
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
-          color: status == 'failed' ? Colors.red.withOpacity(0.1) : Colors.blue.withOpacity(0.1),
+          color: Colors.blue.withOpacity(0.1),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: status == 'failed' ? Colors.red : Colors.blue.withOpacity(0.3)),
+          border: Border.all(color: Colors.blue.withOpacity(0.3), width: 1),
         ),
         child: Center(
-          child: Row(
+          child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               SizedBox(
-                width: 40,
-                height: 40,
-                child: _isProcessing
-                    ? const CircularProgressIndicator(valueColor: AlwaysStoppedAnimation<Color>(Colors.blue), strokeWidth: 4)
-                    : Icon(
-                  status == 'failed' ? Icons.error : Icons.model_training,
-                  color: status == 'failed' ? Colors.red : Colors.blue,
-                  size: 40,
-                ),
+                width: 50,
+                height: 50,
+                child: _isProcessing || status == 'processing'
+                    ? CircularProgressIndicator(
+                  valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
+                  strokeWidth: 4,
+                )
+                    : const Icon(Icons.model_training, color: Colors.blue, size: 50),
               ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      status == 'failed' ? 'Model Processing Failed' : 'Process 3D Model',
-                      style: TextStyle(
-                        color: status == 'failed' ? Colors.red : Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      _statusMessage,
-                      style: TextStyle(
-                        color: status == 'failed' ? Colors.redAccent : Colors.white70,
-                        fontSize: 14,
-                      ),
-                    ),
-                  ],
-                ),
+              const SizedBox(height: 16),
+              Text(
+                status == 'processing' ? 'Processing in Progress' : 'Process 3D Model',
+                style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                textAlign: TextAlign.center,
               ),
+              const SizedBox(height: 8),
+              Text(
+                status == 'processing'
+                    ? 'Estimated time: ~$estimatedTimeText minutes\n$_statusMessage'
+                    : _statusMessage,
+                style: const TextStyle(color: Colors.white70, fontSize: 14),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              if (status == 'processing' && isApiScan)
+                ElevatedButton(
+                  onPressed: _refreshScanStatus,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue[800],
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text('Refresh Status'),
+                ),
             ],
           ),
         ),
@@ -1475,16 +1324,6 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
     );
   }
 
-  Widget _commentRow(String comment) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Expanded(child: Text(comment, style: const TextStyle(color: Colors.white70, fontSize: 14))),
-        TextButton(onPressed: () {}, child: const Text('View Pin →', style: TextStyle(color: Colors.blue))),
-      ],
-    );
-  }
-
   Widget _buildImagesTab() {
     if (_isLoadingApiData) {
       return const Center(
@@ -1496,7 +1335,6 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
         ),
       );
     }
-
     if (_isFromAPI && _apiScanDetail != null) {
       final apiImages = _apiScanDetail!.images;
       if (apiImages.isEmpty) {
@@ -1507,7 +1345,6 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
           ),
         );
       }
-
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8),
         child: GridView.builder(
@@ -1555,7 +1392,6 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
           ),
         );
       }
-
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8),
         child: GridView.builder(
@@ -1597,7 +1433,6 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
             double.tryParse(coord[1].toString()) != null &&
             double.tryParse(coord[0].toString()) != 0.0 &&
             double.tryParse(coord[1].toString()) != 0.0);
-
     return Scaffold(
       backgroundColor: Colors.grey[900],
       body: SafeArea(
@@ -1611,8 +1446,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
                     children: [
                       IconButton(
                         icon: const Icon(Icons.arrow_back_ios, color: Colors.white, size: 20),
-                        onPressed: (){
-                          Navigator.pop(context); // Navigate back to DashboardScreen
+                        onPressed: () {
+                          Navigator.pop(context);
                         },
                       ),
                       const Text(
@@ -1755,7 +1590,11 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
                           left: 16,
                           child: IconButton(
                             icon: const Icon(Icons.close, color: Colors.white, size: 30),
-                            onPressed: () => setState(() => _isFullScreenMap = false),
+                            onPressed: () {
+                              if (mounted) {
+                                setState(() => _isFullScreenMap = false);
+                              }
+                            },
                           ),
                         ),
                       ],

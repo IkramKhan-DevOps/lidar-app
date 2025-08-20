@@ -107,6 +107,7 @@ class GpsPointModel {
   final String longitude;
   final double accuracy;
   final DateTime timestamp;
+  final String? topViewImage; // Added topViewImage to GPS points
 
   GpsPointModel({
     required this.id,
@@ -114,6 +115,7 @@ class GpsPointModel {
     required this.longitude,
     required this.accuracy,
     required this.timestamp,
+    this.topViewImage,
   });
 
   factory GpsPointModel.fromJson(Map<String, dynamic> json) {
@@ -123,6 +125,7 @@ class GpsPointModel {
       longitude: json['longitude']?.toString() ?? '0.0',
       accuracy: ScanDetailModel._parseDouble(json['accuracy']),
       timestamp: ScanDetailModel._parseDateTime(json['timestamp']),
+      topViewImage: json['top_view_image']?.toString(),
     );
   }
 
@@ -135,12 +138,14 @@ class PointCloudModel {
   final int id;
   final String? processedModel;  // Removed grayModel from here
   final String? snapshot;
+  final String? topViewImage;  // Changed from top_view_image to camelCase
   final DateTime uploadedAt;
 
   PointCloudModel({
     required this.id,
     this.processedModel,
     this.snapshot,
+    this.topViewImage,
     required this.uploadedAt,
   });
 
@@ -149,6 +154,7 @@ class PointCloudModel {
       id: ScanDetailModel._parseInt(json['id']),
       processedModel: json['processed_model']?.toString(),
       snapshot: json['snapshot']?.toString(),
+      topViewImage: json['top_view_image']?.toString(),
       uploadedAt: ScanDetailModel._parseDateTime(json['uploaded_at']),
     );
   }
