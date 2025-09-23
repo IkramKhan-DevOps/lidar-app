@@ -191,13 +191,8 @@ NetworkApiService({this.onUnauthorized});
     }
   }
 
-  dynamic _validate(http.Response res) async { // Make this method async
-    // Success codes we accept
-    if (res.statusCode == 200 ||
-        res.statusCode == 201 ||
-        res.statusCode == 202 ||
-        res.statusCode == 204) {
-      if (res.body.isEmpty) return {}; // 204 or empty body
+  dynamic _validate(http.Response res) {
+    if (res.statusCode == 200 || res.statusCode == 201) {
       try {
         return jsonDecode(res.body);
       } catch (_) {
@@ -205,19 +200,17 @@ NetworkApiService({this.onUnauthorized});
       }
     }
 
-    final body = res.body;
     switch (res.statusCode) {
       case 400:
-        throw BadRequestException(body);
+        throw BadRequestException(res.body);
       case 401:
-        // _redirectToLogin();
-        throw UnauthorizedException(body);
+        throw UnauthorizedException(res.body); // This is critical
       case 403:
-        throw UnauthorizedException(body);
+        throw UnauthorizedException(res.body);
       case 404:
-        throw FetchDataException('404 Not Found: $body');
+        throw FetchDataException('404 Not Found: ${res.body}');
       default:
-        throw FetchDataException('Status ${res.statusCode}: $body');
+        throw FetchDataException('Status ${res.statusCode}: ${res.body}');
     }
   }
 

@@ -98,31 +98,29 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
   // - Waits for BOTH to complete (using Future.wait).
   // - Routes once based on auth state.
   // =============================================================
-  Future<void> _startFlow() async {
-    // Attempt to restore a previous authenticated session.
-    final restoreFuture =
-    ref.read(authViewModelProvider.notifier).tryRestoreSession();
 
-    // Enforce the minimum splash visibility.
+  Future<void> _startFlow() async {
+    // This will now call your updated tryRestoreSession() which validates the token
+    final restoreFuture = ref.read(authViewModelProvider.notifier).tryRestoreSession();
+
+    // Enforce the minimum splash visibility
     final delayFuture = Future.delayed(_minDisplay);
 
-    // Wait for both operations to finish.
+    // Wait for both operations to finish
     await Future.wait([restoreFuture, delayFuture]);
 
-    // Abort if widget is gone or we've already navigated.
     if (!mounted || _navigated) return;
 
     final auth = ref.read(authViewModelProvider);
 
-    // Route exactly once.
+    // Route based on authentication state
     _navigated = true;
     if (auth.isLoggedIn) {
       Navigator.pushReplacementNamed(context, AppRoutes.homeScreen);
     } else {
-      Navigator.pushNamed(context, AppRoutes.loginScreen);
+      Navigator.pushReplacementNamed(context, AppRoutes.loginScreen);
     }
   }
-
   @override
   void dispose() {
     // Always dispose animation controller to prevent leaks.

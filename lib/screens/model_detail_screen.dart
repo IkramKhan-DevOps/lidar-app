@@ -16,7 +16,9 @@ import 'dashboard_screen.dart';
 
 class ModelDetailScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> scan;
+
   const ModelDetailScreen({super.key, required this.scan});
+
   @override
   ConsumerState<ModelDetailScreen> createState() => _ModelDetailScreenState();
 }
@@ -42,6 +44,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
   ScanDetailModel? _apiScanDetail;
   bool _isLoadingApiData = false;
   bool _isFromAPI = false;
+  bool _isFullScreenImage = false;
+  String? _fullScreenImageUrl;
 
   @override
   void initState() {
@@ -52,9 +56,13 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
     _startAutoRefreshTimer();
     if (widget.scan['metadata'] == null) {
       widget.scan['metadata'] = <String, dynamic>{
-        'scan_id': widget.scan['scanID'] ?? widget.scan['id'] ?? widget.scan['folderPath']?.split('/').last ?? 'unknown',
+        'scan_id': widget.scan['scanID'] ??
+            widget.scan['id'] ??
+            widget.scan['folderPath']?.split('/').last ??
+            'unknown',
         'name': widget.scan['name'] ?? widget.scan['title'] ?? 'Unnamed Scan',
-        'timestamp': widget.scan['timestamp'] ?? DateTime.now().toIso8601String(),
+        'timestamp':
+            widget.scan['timestamp'] ?? DateTime.now().toIso8601String(),
         'location_name': widget.scan['locationName'] ?? '',
         'coordinates': widget.scan['coordinates'] ?? [],
         'image_count': widget.scan['imageCount'] ?? 0,
@@ -64,8 +72,10 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
         'duration_seconds': widget.scan['duration_seconds'] ?? 0.0,
       };
     }
-    widget.scan['snapshotPath'] = widget.scan['snapshotPath'] ?? widget.scan['metadata']['snapshot_path'];
-    _nameController = TextEditingController(text: widget.scan['metadata']['name'] ?? 'Unnamed Scan');
+    widget.scan['snapshotPath'] =
+        widget.scan['snapshotPath'] ?? widget.scan['metadata']['snapshot_path'];
+    _nameController = TextEditingController(
+        text: widget.scan['metadata']['name'] ?? 'Unnamed Scan');
     if (_isFromAPI) {
       _loadApiScanData();
     } else {
@@ -112,10 +122,12 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
             _isAutoRefreshing = false;
           });
           _updateScanMetadataFromApi(apiScanDetail);
-          if (_status == 'completed' || _status == 'failed' || _status == 'uploaded') {
+          if (_status == 'completed' ||
+              _status == 'failed' ||
+              _status == 'uploaded') {
             _statusRefreshTimer.cancel();
             if (_status == 'completed') {
-              _tabController.animateTo(0); // Switch to 3D View tab
+              _tabController.animateTo(1); // Switch to 3D View tab
             }
           }
         }
@@ -132,12 +144,15 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
 
   void _startAutoRefreshTimer() {
     if (_isFromAPI) {
-      _statusRefreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) async {
+      _statusRefreshTimer =
+          Timer.periodic(const Duration(seconds: 30), (timer) async {
         if (!mounted) {
           timer.cancel();
           return;
         }
-        if (_status != 'completed' && _status != 'failed' && _status != 'uploaded') {
+        if (_status != 'completed' &&
+            _status != 'failed' &&
+            _status != 'uploaded') {
           await _refreshScanStatus();
         } else {
           timer.cancel();
@@ -196,11 +211,13 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to load scan details: ${e.toString()}', style: const TextStyle(color: Colors.white, fontSize: 14)),
+            content: Text('Failed to load scan details: ${e.toString()}',
+                style: const TextStyle(color: Colors.white, fontSize: 14)),
             backgroundColor: Colors.red[800],
             duration: const Duration(seconds: 5),
             behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
         );
       }
@@ -208,7 +225,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
   }
 
   void _updateScanMetadataFromApi(ScanDetailModel apiData) {
-    final coordinates = apiData.gpsPoints.map((gps) => [gps.latitude, gps.longitude]).toList();
+    final coordinates =
+        apiData.gpsPoints.map((gps) => [gps.latitude, gps.longitude]).toList();
     final dataSizeMb = apiData.dataSizeMb;
     final modelSizeBytes = (dataSizeMb * 1024 * 1024).toInt();
     if (mounted) {
@@ -254,8 +272,11 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
     try {
       final folderPath = widget.scan['folderPath']?.toString();
       if (folderPath == null) throw Exception('Invalid folder path');
-      final metadataResult = await platform.invokeMethod('getScanMetadata', {'folderPath': folderPath});
-      final metadata = (metadataResult as Map<dynamic, dynamic>?)?.cast<String, dynamic>() ?? widget.scan['metadata'];
+      final metadataResult = await platform
+          .invokeMethod('getScanMetadata', {'folderPath': folderPath});
+      final metadata =
+          (metadataResult as Map<dynamic, dynamic>?)?.cast<String, dynamic>() ??
+              widget.scan['metadata'];
       final status = metadata['status']?.toString() ?? 'pending';
       final hasUsdz = metadata['hasUSDZ'] == true;
       if (mounted) {
@@ -270,14 +291,15 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
         });
       }
       if (hasUsdz && status != 'uploaded') {
-        await platform.invokeMethod('updateScanStatus', {'folderPath': folderPath, 'status': 'uploaded'});
+        await platform.invokeMethod('updateScanStatus',
+            {'folderPath': folderPath, 'status': 'uploaded'});
         if (mounted) {
           setState(() {
             _status = 'uploaded';
             _statusMessage = 'Tap to view 3D model';
             widget.scan['metadata']['status'] = 'uploaded';
             widget.scan['usdzPath'] = '$folderPath/model.usdz';
-            _tabController.animateTo(0); // Switch to 3D View tab
+            _tabController.animateTo(1); // Switch to 3D View tab
           });
         }
       }
@@ -286,7 +308,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       if (mounted) {
         setState(() {
           _status = 'pending';
-          _statusMessage = 'Data has not been processed. Tap to process the model.';
+          _statusMessage =
+              'Data has not been processed. Tap to process the model.';
           _errorDetails = e.toString();
         });
       }
@@ -307,7 +330,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
 
   Future<void> _fetchImagePaths() async {
     try {
-      final result = await platform.invokeMethod('getScanImages', {'folderPath': widget.scan['folderPath']});
+      final result = await platform.invokeMethod(
+          'getScanImages', {'folderPath': widget.scan['folderPath']});
       if (result is List) {
         if (mounted) {
           setState(() {
@@ -334,7 +358,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
     if (!mounted) return;
     if (call.method == 'processingComplete') {
       final folderPath = call.arguments['usdzPath']?.toString();
-      if (folderPath != null && folderPath.contains(widget.scan['folderPath'])) {
+      if (folderPath != null &&
+          folderPath.contains(widget.scan['folderPath'])) {
         if (mounted) {
           setState(() {
             _status = 'uploaded';
@@ -345,7 +370,7 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
             if (call.arguments['snapshotPath'] != null) {
               widget.scan['snapshotPath'] = call.arguments['snapshotPath'];
             }
-            _tabController.animateTo(0); // Switch to 3D View tab
+            _tabController.animateTo(1); // Switch to 3D View tab
           });
         }
       }
@@ -356,18 +381,25 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
           setState(() {
             widget.scan['metadata'] = <String, dynamic>{
               ...widget.scan['metadata'],
-              'scan_id': call.arguments['scanID'] ?? widget.scan['metadata']['scan_id'],
+              'scan_id': call.arguments['scanID'] ??
+                  widget.scan['metadata']['scan_id'],
               'name': call.arguments['name'] ?? widget.scan['metadata']['name'],
-              'timestamp': call.arguments['timestamp'] ?? widget.scan['metadata']['timestamp'],
-              'location_name': call.arguments['locationName'] ?? widget.scan['metadata']['location_name'],
-              'coordinates': call.arguments['coordinates'] ?? widget.scan['metadata']['coordinates'],
-              'image_count': call.arguments['imageCount'] ?? widget.scan['metadata']['image_count'],
-              'duration_seconds': call.arguments['durationSeconds'] ?? widget.scan['metadata']['duration_seconds'],
+              'timestamp': call.arguments['timestamp'] ??
+                  widget.scan['metadata']['timestamp'],
+              'location_name': call.arguments['locationName'] ??
+                  widget.scan['metadata']['location_name'],
+              'coordinates': call.arguments['coordinates'] ??
+                  widget.scan['metadata']['coordinates'],
+              'image_count': call.arguments['imageCount'] ??
+                  widget.scan['metadata']['image_count'],
+              'duration_seconds': call.arguments['durationSeconds'] ??
+                  widget.scan['metadata']['duration_seconds'],
               'status': 'pending',
             };
             _nameController.text = widget.scan['metadata']['name'];
             _status = 'pending';
-            _statusMessage = 'Data has not been processed. Tap to process the model.';
+            _statusMessage =
+                'Data has not been processed. Tap to process the model.';
           });
           await _fetchImagePaths();
         }
@@ -404,7 +436,9 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Text('For processing, you need to connect to the internet.', style: TextStyle(color: Colors.white, fontSize: 14)),
+            content: const Text(
+                'For processing, you need to connect to the internet.',
+                style: TextStyle(color: Colors.white, fontSize: 14)),
             backgroundColor: Colors.red[800],
             duration: const Duration(seconds: 3),
           ),
@@ -414,12 +448,15 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
     }
     if (_status == 'uploaded' && widget.scan['usdzPath'] != null) {
       try {
-        await platform.invokeMethod('openUSDZ', {'path': widget.scan['usdzPath']});
+        await platform
+            .invokeMethod('openUSDZ', {'path': widget.scan['usdzPath']});
       } on PlatformException catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: const Text('Couldn\'t open the 3D model. Please try again.', style: TextStyle(color: Colors.white, fontSize: 14)),
+              content: const Text(
+                  'Couldn\'t open the 3D model. Please try again.',
+                  style: TextStyle(color: Colors.white, fontSize: 14)),
               backgroundColor: Colors.red[800],
               duration: const Duration(seconds: 3),
             ),
@@ -433,7 +470,9 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: const Text('For processing, you need to connect to the internet.', style: TextStyle(color: Colors.white, fontSize: 14)),
+              content: const Text(
+                  'For processing, you need to connect to the internet.',
+                  style: TextStyle(color: Colors.white, fontSize: 14)),
               backgroundColor: Colors.red[800],
               duration: const Duration(seconds: 3),
             ),
@@ -464,17 +503,22 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       });
     }
     try {
-      final scanIdStr = widget.scan['metadata']['id'] ?? widget.scan['metadata']['scan_id'] ?? widget.scan['id'];
+      final scanIdStr = widget.scan['metadata']['id'] ??
+          widget.scan['metadata']['scan_id'] ??
+          widget.scan['id'];
       int scanId;
       if (scanIdStr is int) {
         scanId = scanIdStr;
       } else if (scanIdStr is String) {
         scanId = int.tryParse(scanIdStr) ?? 0;
       } else {
-        throw PlatformException(code: 'INVALID_SCAN_ID', message: 'Invalid scan ID: $scanIdStr');
+        throw PlatformException(
+            code: 'INVALID_SCAN_ID', message: 'Invalid scan ID: $scanIdStr');
       }
       if (scanId == 0) {
-        throw PlatformException(code: 'INVALID_SCAN_ID', message: 'Scan ID is required for server processing');
+        throw PlatformException(
+            code: 'INVALID_SCAN_ID',
+            message: 'Scan ID is required for server processing');
       }
       double fileSizeMB;
       if (_apiScanDetail?.dataSizeMb != null) {
@@ -487,7 +531,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       final estimatedTimeText = estimatedMinutes.toStringAsFixed(1);
       if (mounted) {
         setState(() {
-          _statusMessage = 'Sending processing request to server...\nEstimated time: ~$estimatedTimeText minutes';
+          _statusMessage =
+              'Sending processing request to server...\nEstimated time: ~$estimatedTimeText minutes';
         });
       }
       final result = await platform.invokeMethod('processModelOnServer', {
@@ -505,21 +550,26 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(result['message'] ?? 'Processing started successfully!', style: const TextStyle(color: Colors.white, fontSize: 14)),
+              content: Text(
+                  result['message'] ?? 'Processing started successfully!',
+                  style: const TextStyle(color: Colors.white, fontSize: 14)),
               backgroundColor: Colors.green[800],
               duration: const Duration(seconds: 3),
             ),
           );
         }
       } else {
-        throw PlatformException(code: 'PROCESSING_FAILED', message: result['message'] ?? 'Failed to start server processing');
+        throw PlatformException(
+            code: 'PROCESSING_FAILED',
+            message: result['message'] ?? 'Failed to start server processing');
       }
     } on PlatformException catch (e) {
       if (mounted) {
         setState(() {
           _isProcessing = false;
           _status = 'failed';
-          _statusMessage = 'Scan processing failed Kindly Scan Properly and Try again.';
+          _statusMessage =
+              'Scan processing failed Kindly Scan Properly and Try again.';
           _errorDetails = e.message;
           widget.scan['metadata']['status'] = 'failed';
         });
@@ -538,9 +588,11 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
     try {
       final folderPath = widget.scan['folderPath']?.toString();
       if (folderPath == null) {
-        throw PlatformException(code: 'INVALID_PATH', message: 'Invalid folder path');
+        throw PlatformException(
+            code: 'INVALID_PATH', message: 'Invalid folder path');
       }
-      final zipSizeResult = await platform.invokeMethod('getZipSize', {'folderPath': folderPath});
+      final zipSizeResult =
+          await platform.invokeMethod('getZipSize', {'folderPath': folderPath});
       final zipSizeMB = (zipSizeResult['zipSizeBytes'] as num) / (1024 * 1024);
       final estimatedMinutes = (zipSizeMB / 50.0) * 2.0;
       final estimatedTimeText = estimatedMinutes.toStringAsFixed(1);
@@ -549,7 +601,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
           _statusMessage = 'Processing model (~$estimatedTimeText minutes)...';
         });
       }
-      final result = await platform.invokeMethod('processScan', {'folderPath': folderPath});
+      final result = await platform
+          .invokeMethod('processScan', {'folderPath': folderPath});
       if (mounted) {
         setState(() {
           _status = 'uploaded';
@@ -557,24 +610,29 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
           _isProcessing = false;
           widget.scan['metadata']['status'] = 'uploaded';
           widget.scan['usdzPath'] = result['usdzPath'];
-          widget.scan['metadata']['model_size_bytes'] = result['modelSizeBytes'];
+          widget.scan['metadata']['model_size_bytes'] =
+              result['modelSizeBytes'];
           if (result['snapshotPath'] != null) {
             widget.scan['snapshotPath'] = result['snapshotPath'];
           }
-          _tabController.animateTo(0); // Switch to 3D View tab
+          _tabController.animateTo(1); // Switch to 3D View tab
         });
       }
-      await platform.invokeMethod('updateScanStatus', {'folderPath': folderPath, 'status': 'uploaded'});
+      await platform.invokeMethod(
+          'updateScanStatus', {'folderPath': folderPath, 'status': 'uploaded'});
     } on PlatformException catch (e) {
       String errorMessage = "Couldn't process the model. Please try again.";
       if (e.code == 'API_STATUS_ERROR' || e.code == 'API_REQUEST_FAILED') {
-        errorMessage = "Couldn't process the model. Please check your internet connection and try again.";
+        errorMessage =
+            "Couldn't process the model. Please check your internet connection and try again.";
       } else if (e.code == 'INVALID_ZIP_DATA') {
         errorMessage = 'Scan data is incomplete. Please try scanning again.';
       } else if (e.code == 'CAMERA_PERMISSION_DENIED') {
-        errorMessage = 'Camera access denied. Please enable camera permissions in Settings.';
+        errorMessage =
+            'Camera access denied. Please enable camera permissions in Settings.';
       } else if (e.code == 'AR_SESSION_ERROR') {
-        errorMessage = 'Unable to start scan. Please try again in a well-lit area.';
+        errorMessage =
+            'Unable to start scan. Please try again in a well-lit area.';
       } else if (e.code == 'SERVER_UNAVAILABLE') {
         errorMessage = 'Server is unavailable. Please try again later.';
       }
@@ -582,20 +640,24 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
         setState(() {
           _isProcessing = false;
           _status = 'failed';
-          _statusMessage = 'Model processing failed: $errorMessage Tap to retry.';
+          _statusMessage =
+              'Model processing failed: $errorMessage Tap to retry.';
           _errorDetails = e.message;
           widget.scan['metadata']['status'] = 'failed';
         });
       }
-      await platform.invokeMethod('updateScanStatus', {'folderPath': widget.scan['folderPath'], 'status': 'failed'});
+      await platform.invokeMethod('updateScanStatus',
+          {'folderPath': widget.scan['folderPath'], 'status': 'failed'});
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(errorMessage, style: const TextStyle(color: Colors.white, fontSize: 14)),
+            content: Text(errorMessage,
+                style: const TextStyle(color: Colors.white, fontSize: 14)),
             backgroundColor: Colors.red[800],
             duration: const Duration(seconds: 3),
             behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
         );
       }
@@ -608,7 +670,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       final scanId = widget.scan['metadata']['scan_id'] ?? widget.scan['id'];
       bool deleteSuccess = true;
       if (_isFromAPI && scanId != null) {
-        final scanIdInt = scanId is int ? scanId : int.tryParse(scanId.toString()) ?? 0;
+        final scanIdInt =
+            scanId is int ? scanId : int.tryParse(scanId.toString()) ?? 0;
         if (scanIdInt > 0) {
           bool? isDeleted = await _scanRepository?.deleteScan(scanId);
           if (isDeleted != true) {
@@ -619,21 +682,25 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
         }
       }
       if (folderPath != null && folderPath.isNotEmpty) {
-        final result = await platform.invokeMethod('deleteScan', {'path': folderPath});
+        final result =
+            await platform.invokeMethod('deleteScan', {'path': folderPath});
         if (result != 'Scan deleted successfully' && result != true) {
           deleteSuccess = false;
-          throw PlatformException(code: 'DELETE_FAILED', message: 'Local deletion failed: $result');
+          throw PlatformException(
+              code: 'DELETE_FAILED', message: 'Local deletion failed: $result');
         }
       }
       if (deleteSuccess) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: const Text('Model deleted successfully', style: TextStyle(color: Colors.white, fontSize: 14)),
+              content: const Text('Model deleted successfully',
+                  style: TextStyle(color: Colors.white, fontSize: 14)),
               backgroundColor: Colors.black87,
               duration: const Duration(seconds: 3),
               behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
             ),
           );
           Navigator.of(context).pop();
@@ -645,11 +712,13 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Couldn’t delete the model: $e', style: const TextStyle(color: Colors.white, fontSize: 14)),
+            content: Text('Couldn’t delete the model: $e',
+                style: const TextStyle(color: Colors.white, fontSize: 14)),
             backgroundColor: Colors.red[800],
             duration: const Duration(seconds: 3),
             behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
         );
       }
@@ -659,16 +728,21 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
   Future<void> _downloadZipFile() async {
     try {
       if (_isFromAPI && widget.scan['id'] != null) {
-        final scanIdInt = widget.scan['id'] is int ? widget.scan['id'] : int.tryParse(widget.scan['id'].toString()) ?? 0;
+        final scanIdInt = widget.scan['id'] is int
+            ? widget.scan['id']
+            : int.tryParse(widget.scan['id'].toString()) ?? 0;
         if (scanIdInt > 0) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: const Text('Zip file downloaded successfully to temporary storage', style: TextStyle(color: Colors.white, fontSize: 14)),
+                content: const Text(
+                    'Zip file downloaded successfully to temporary storage',
+                    style: TextStyle(color: Colors.white, fontSize: 14)),
                 backgroundColor: Colors.black87,
                 duration: const Duration(seconds: 3),
                 behavior: SnackBarBehavior.floating,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8)),
               ),
             );
           }
@@ -680,18 +754,21 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
         if (folderPath == null || folderPath.isEmpty) {
           throw Exception('Folder path is null or empty');
         }
-        final result = await platform.invokeMethod('downloadZipFile', {'folderPath': folderPath});
+        final result = await platform
+            .invokeMethod('downloadZipFile', {'folderPath': folderPath});
         if (result != 'Zip file downloaded successfully' && result != true) {
           throw Exception('Local download failed: $result');
         }
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: const Text('Zip file downloaded successfully', style: TextStyle(color: Colors.white, fontSize: 14)),
+              content: const Text('Zip file downloaded successfully',
+                  style: TextStyle(color: Colors.white, fontSize: 14)),
               backgroundColor: Colors.black87,
               duration: const Duration(seconds: 3),
               behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
             ),
           );
         }
@@ -700,11 +777,13 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Couldn’t download the zip file: $e', style: const TextStyle(color: Colors.white, fontSize: 14)),
+            content: Text('Couldn’t download the zip file: $e',
+                style: const TextStyle(color: Colors.white, fontSize: 14)),
             backgroundColor: Colors.red[800],
             duration: const Duration(seconds: 3),
             behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
         );
       }
@@ -716,7 +795,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: Colors.black87,
-        title: const Text('Delete Project', style: TextStyle(color: Colors.white)),
+        title:
+            const Text('Delete Project', style: TextStyle(color: Colors.white)),
         content: Text(
           'Are you sure you want to delete "${widget.scan['metadata']['name'] ?? 'Unnamed Scan'}"? This action cannot be undone.',
           style: const TextStyle(color: Colors.white70),
@@ -724,7 +804,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+            child:
+                const Text('Cancel', style: TextStyle(color: Colors.white54)),
           ),
           TextButton(
             onPressed: () async {
@@ -755,7 +836,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: Colors.black87,
-        title: const Text('Edit Project Name', style: TextStyle(color: Colors.white)),
+        title: const Text('Edit Project Name',
+            style: TextStyle(color: Colors.white)),
         content: TextField(
           controller: _nameController,
           style: const TextStyle(color: Colors.white),
@@ -775,11 +857,14 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+            child:
+                const Text('Cancel', style: TextStyle(color: Colors.white54)),
           ),
           TextButton(
             onPressed: () async {
-              final newName = _nameController.text.isEmpty ? 'Unnamed Scan' : _nameController.text;
+              final newName = _nameController.text.isEmpty
+                  ? 'Unnamed Scan'
+                  : _nameController.text;
               try {
                 await platform.invokeMethod('updateScanName', {
                   'folderPath': widget.scan['folderPath'],
@@ -795,11 +880,14 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
                 if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
-                      content: const Text('Couldn’t update the project name. Please try again.', style: TextStyle(color: Colors.white, fontSize: 14)),
+                      content: const Text(
+                          'Couldn’t update the project name. Please try again.',
+                          style: TextStyle(color: Colors.white, fontSize: 14)),
                       backgroundColor: Colors.red[800],
                       duration: const Duration(seconds: 3),
                       behavior: SnackBarBehavior.floating,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8)),
                     ),
                   );
                 }
@@ -814,7 +902,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
   }
 
   Widget _buildMap({bool isFullScreen = false}) {
-    final rawCoordinates = widget.scan['metadata']['coordinates'] as List<dynamic>?;
+    final rawCoordinates =
+        widget.scan['metadata']['coordinates'] as List<dynamic>?;
     final defaultPosition = const LatLng(0.0, 0.0);
     const defaultZoom = 2.0;
     List<LatLng> points = [];
@@ -824,11 +913,14 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
     if (rawCoordinates != null && rawCoordinates.isNotEmpty) {
       final coordinates = rawCoordinates
           .map((coord) {
-        if (coord is List<dynamic> && coord.length >= 2) {
-          return [double.tryParse(coord[0].toString()) ?? 0.0, double.tryParse(coord[1].toString()) ?? 0.0];
-        }
-        return null;
-      })
+            if (coord is List<dynamic> && coord.length >= 2) {
+              return [
+                double.tryParse(coord[0].toString()) ?? 0.0,
+                double.tryParse(coord[1].toString()) ?? 0.0
+              ];
+            }
+            return null;
+          })
           .whereType<List<double>>()
           .toList();
       points = coordinates
@@ -843,33 +935,34 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
     }
     final polylines = points.isNotEmpty
         ? <Polyline>{
-      Polyline(
-        polylineId: const PolylineId('scan_path'),
-        points: points,
-        color: Colors.blue,
-        width: 4,
-      ),
-    }
+            Polyline(
+              polylineId: const PolylineId('scan_path'),
+              points: points,
+              color: Colors.blue,
+              width: 4,
+            ),
+          }
         : <Polyline>{};
     final markers = points.isNotEmpty
         ? <Marker>{
-      Marker(
-        markerId: const MarkerId('start_point'),
-        position: points.first,
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
-        onTap: () {
-          final topViewImage = _apiScanDetail?.pointCloud?.topViewImage;
-          if (topViewImage != null && topViewImage.isNotEmpty) {
-            if (mounted) {
-              setState(() {
-                _selectedTopViewImage = topViewImage;
-                _selectedMarkerPosition = points.first;
-              });
-            }
+            Marker(
+              markerId: const MarkerId('start_point'),
+              position: points.first,
+              icon: BitmapDescriptor.defaultMarkerWithHue(
+                  BitmapDescriptor.hueRed),
+              onTap: () {
+                final topViewImage = _apiScanDetail?.pointCloud?.topViewImage;
+                if (topViewImage != null && topViewImage.isNotEmpty) {
+                  if (mounted) {
+                    setState(() {
+                      _selectedTopViewImage = topViewImage;
+                      _selectedMarkerPosition = points.first;
+                    });
+                  }
+                }
+              },
+            ),
           }
-        },
-      ),
-    }
         : <Marker>{};
     return Stack(
       children: [
@@ -936,8 +1029,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
               onTap: () {
                 if (mounted) {
                   setState(() {
-                    _selectedTopViewImage = null;
-                    _selectedMarkerPosition = null;
+                    _isFullScreenImage = true;
+                    _fullScreenImageUrl = _selectedTopViewImage;
                   });
                 }
               },
@@ -959,7 +1052,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
                       return Center(
                         child: CircularProgressIndicator(
                           value: loadingProgress.expectedTotalBytes != null
-                              ? loadingProgress.cumulativeBytesLoaded / loadingProgress.expectedTotalBytes!
+                              ? loadingProgress.cumulativeBytesLoaded /
+                                  loadingProgress.expectedTotalBytes!
                               : null,
                         ),
                       );
@@ -974,6 +1068,73 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
             ),
           ),
       ],
+    );
+  }
+
+  Widget _buildFullScreenImageViewer() {
+    if (!_isFullScreenImage || _fullScreenImageUrl == null)
+      return const SizedBox.shrink();
+
+    return GestureDetector(
+      onTap: () {
+        if (mounted) {
+          setState(() {
+            _isFullScreenImage = false;
+            _fullScreenImageUrl = null;
+          });
+        }
+      },
+      child: Container(
+        color: Colors.black,
+        child: Stack(
+          children: [
+            Center(
+              child: InteractiveViewer(
+                panEnabled: true,
+                minScale: 0.5,
+                maxScale: 4.0,
+                child: Image.network(
+                  _fullScreenImageUrl!,
+                  fit: BoxFit.contain,
+                  loadingBuilder: (context, child, loadingProgress) {
+                    if (loadingProgress == null) return child;
+                    return Center(
+                      child: CircularProgressIndicator(
+                        value: loadingProgress.expectedTotalBytes != null
+                            ? loadingProgress.cumulativeBytesLoaded /
+                                loadingProgress.expectedTotalBytes!
+                            : null,
+                      ),
+                    );
+                  },
+                  errorBuilder: (context, error, stackTrace) => const Center(
+                    child: Icon(
+                      Icons.error,
+                      color: Colors.red,
+                      size: 50,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 16,
+              right: 16,
+              child: IconButton(
+                icon: const Icon(Icons.close, color: Colors.white, size: 30),
+                onPressed: () {
+                  if (mounted) {
+                    setState(() {
+                      _isFullScreenImage = false;
+                      _fullScreenImageUrl = null;
+                    });
+                  }
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -1011,13 +1172,16 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       final sizeMB = (modelSizeBytes / (1024 * 1024));
       modelSizeMB = sizeMB.toStringAsFixed(1);
     }
-    final imageCount = _apiScanDetail?.totalImages.toString() ?? widget.scan['metadata']['image_count']?.toString() ?? '0';
+    final imageCount = _apiScanDetail?.totalImages.toString() ??
+        widget.scan['metadata']['image_count']?.toString() ??
+        '0';
     String duration;
     if (_apiScanDetail?.duration != null) {
       final durationSeconds = _apiScanDetail!.duration.toDouble();
       duration = _formatDuration(durationSeconds);
     } else {
-      final durationSecondsValue = _parseDurationSeconds(widget.scan['metadata']['duration_seconds']);
+      final durationSecondsValue =
+          _parseDurationSeconds(widget.scan['metadata']['duration_seconds']);
       duration = _formatDuration(durationSecondsValue);
     }
     String areaCovered;
@@ -1094,9 +1258,14 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
             children: [
               Icon(Icons.wifi_off_rounded, color: Colors.orange, size: 48),
               SizedBox(height: 16),
-              Text('Offline Mode', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              Text('Offline Mode',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold)),
               SizedBox(height: 8),
-              Text('Connect to the internet to process and view 3D models.', style: TextStyle(color: Colors.white70, fontSize: 14)),
+              Text('Connect to the internet to process and view 3D models.',
+                  style: TextStyle(color: Colors.white70, fontSize: 14)),
             ],
           ),
         ),
@@ -1105,7 +1274,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
 
     // API scan with completed status
     final processedModelUrl = _apiScanDetail?.pointCloud?.processedModel;
-    final hasProcessedModel = processedModelUrl != null && processedModelUrl.isNotEmpty;
+    final hasProcessedModel =
+        processedModelUrl != null && processedModelUrl.isNotEmpty;
     if (isApiScan && status == 'completed' && hasProcessedModel) {
       final scanId = widget.scan['metadata']['id'].toString();
       return GestureDetector(
@@ -1134,9 +1304,14 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
               children: [
                 Icon(Icons.view_in_ar, color: Colors.green, size: 50),
                 SizedBox(height: 16),
-                Text('3D Model Ready', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                Text('3D Model Ready',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold)),
                 SizedBox(height: 8),
-                Text('Tap to view processed model', style: TextStyle(color: Colors.white70, fontSize: 14)),
+                Text('Tap to view processed model',
+                    style: TextStyle(color: Colors.white70, fontSize: 14)),
               ],
             ),
           ),
@@ -1146,7 +1321,9 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
 
     // Local scan with uploaded status
     final snapshotPath = widget.scan['snapshotPath'];
-    if (status == 'uploaded' && snapshotPath != null && File(snapshotPath).existsSync()) {
+    if (status == 'uploaded' &&
+        snapshotPath != null &&
+        File(snapshotPath).existsSync()) {
       return Container(
         margin: const EdgeInsets.symmetric(vertical: 10),
         child: SizedBox(
@@ -1156,7 +1333,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
             children: [
               ClipRRect(
                 borderRadius: BorderRadius.circular(12),
-                child: Image.file(File(snapshotPath), width: double.infinity, fit: BoxFit.cover),
+                child: Image.file(File(snapshotPath),
+                    width: double.infinity, fit: BoxFit.cover),
               ),
               Positioned(
                 bottom: 8,
@@ -1193,9 +1371,16 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
               children: [
                 const Icon(Icons.error_outline, color: Colors.red, size: 50),
                 const SizedBox(height: 16),
-                const Text('Processing Failed', style: TextStyle(color: Colors.red, fontSize: 18, fontWeight: FontWeight.bold)),
+                const Text('Processing Failed',
+                    style: TextStyle(
+                        color: Colors.red,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold)),
                 const SizedBox(height: 8),
-                Text(_statusMessage, style: const TextStyle(color: Colors.redAccent, fontSize: 14), textAlign: TextAlign.center),
+                Text(_statusMessage,
+                    style:
+                        const TextStyle(color: Colors.redAccent, fontSize: 14),
+                    textAlign: TextAlign.center),
                 const SizedBox(height: 16),
                 ElevatedButton(
                   onPressed: _previewUSDZ,
@@ -1242,15 +1427,21 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
                 height: 50,
                 child: _isProcessing || status == 'processing'
                     ? CircularProgressIndicator(
-                  valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
-                  strokeWidth: 4,
-                )
-                    : const Icon(Icons.model_training, color: Colors.blue, size: 50),
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
+                        strokeWidth: 4,
+                      )
+                    : const Icon(Icons.model_training,
+                        color: Colors.blue, size: 50),
               ),
               const SizedBox(height: 16),
               Text(
-                status == 'processing' ? 'Processing in Progress' : 'Process 3D Model',
-                style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                status == 'processing'
+                    ? 'Processing in Progress'
+                    : 'Process 3D Model',
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 8),
@@ -1281,12 +1472,21 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
   Map<String, dynamic> _statusIcons(String status) {
     switch (status) {
       case 'uploaded':
-        return {'icons': [Icons.check_box, Icons.image], 'color': Colors.green};
+        return {
+          'icons': [Icons.check_box, Icons.image],
+          'color': Colors.green
+        };
       case 'failed':
-        return {'icons': [Icons.error_outline, Icons.image_not_supported], 'color': Colors.red};
+        return {
+          'icons': [Icons.error_outline, Icons.image_not_supported],
+          'color': Colors.red
+        };
       case 'pending':
       default:
-        return {'icons': [Icons.access_time, Icons.image], 'color': Colors.orange};
+        return {
+          'icons': [Icons.access_time, Icons.image],
+          'color': Colors.orange
+        };
     }
   }
 
@@ -1309,9 +1509,14 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
         children: [
           Icon(icon, size: 18, color: Colors.white54),
           const SizedBox(width: 10),
-          Text(label, style: const TextStyle(color: Colors.white70, fontSize: 15)),
+          Text(label,
+              style: const TextStyle(color: Colors.white70, fontSize: 15)),
           const SizedBox(width: 6),
-          Text(value, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500)),
+          Text(value,
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500)),
         ],
       ),
     );
@@ -1320,7 +1525,11 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
   Widget _linkedText(String label) {
     return GestureDetector(
       onTap: () {},
-      child: Text(label, style: const TextStyle(color: Colors.blue, decoration: TextDecoration.underline, fontSize: 14)),
+      child: Text(label,
+          style: const TextStyle(
+              color: Colors.blue,
+              decoration: TextDecoration.underline,
+              fontSize: 14)),
     );
   }
 
@@ -1424,10 +1633,12 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
   @override
   Widget build(BuildContext context) {
     print("WIDGET SCAN ........... ${widget.scan.toString()}");
-    final rawCoordinates = widget.scan['metadata']['coordinates'] as List<dynamic>?;
+    final rawCoordinates =
+        widget.scan['metadata']['coordinates'] as List<dynamic>?;
     final hasValidCoordinates = rawCoordinates != null &&
         rawCoordinates.isNotEmpty &&
-        rawCoordinates.any((coord) => coord is List<dynamic> &&
+        rawCoordinates.any((coord) =>
+            coord is List<dynamic> &&
             coord.length >= 2 &&
             double.tryParse(coord[0].toString()) != null &&
             double.tryParse(coord[1].toString()) != null &&
@@ -1441,22 +1652,28 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
             Column(
               children: [
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16.0, vertical: 12),
                   child: Row(
                     children: [
                       IconButton(
-                        icon: const Icon(Icons.arrow_back_ios, color: Colors.white, size: 20),
+                        icon: const Icon(Icons.arrow_back_ios,
+                            color: Colors.white, size: 20),
                         onPressed: () {
                           Navigator.pop(context);
                         },
                       ),
                       const Text(
                         "PROJECT",
-                        style: TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.bold),
+                        style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold),
                       ),
                       const Spacer(),
                       PopupMenuButton<String>(
-                        icon: const Icon(Icons.more_horiz, color: Colors.white, size: 24),
+                        icon: const Icon(Icons.more_horiz,
+                            color: Colors.white, size: 24),
                         onSelected: (value) {
                           if (value == 'delete') {
                             _showDeleteConfirmationDialog();
@@ -1467,24 +1684,28 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
                         itemBuilder: (context) => [
                           const PopupMenuItem(
                             value: 'download',
-                            child: Text('Download Zip', style: TextStyle(color: Colors.blue)),
+                            child: Text('Download Zip',
+                                style: TextStyle(color: Colors.blue)),
                           ),
                           const PopupMenuItem(
                             value: 'delete',
-                            child: Text('Delete', style: TextStyle(color: Colors.red)),
+                            child: Text('Delete',
+                                style: TextStyle(color: Colors.red)),
                           ),
                         ],
                       ),
                       const SizedBox(width: 12),
                       IconButton(
-                        icon: const Icon(Icons.close, color: Colors.white, size: 20),
+                        icon: const Icon(Icons.close,
+                            color: Colors.white, size: 20),
                         onPressed: () => Navigator.pop(context),
                       ),
                     ],
                   ),
                 ),
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -1493,33 +1714,42 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
                           Expanded(
                             child: Text(
                               widget.scan['metadata']['name'] ?? 'Unnamed Scan',
-                              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
+                              style: const TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white),
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
                           const SizedBox(width: 8),
                           IconButton(
-                            icon: const Icon(Icons.edit, size: 20, color: Colors.white60),
+                            icon: const Icon(Icons.edit,
+                                size: 20, color: Colors.white60),
                             onPressed: _showEditNameDialog,
                           ),
                         ],
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        widget.scan['metadata']['scan_id']?.toString() ?? 'Unknown ID',
-                        style: const TextStyle(color: Colors.white54, fontSize: 14),
+                        widget.scan['metadata']['scan_id']?.toString() ??
+                            'Unknown ID',
+                        style: const TextStyle(
+                            color: Colors.white54, fontSize: 14),
                       ),
                       const SizedBox(height: 6),
                       Row(
                         children: [
-                          const Icon(Icons.location_pin, color: Colors.white54, size: 20),
+                          const Icon(Icons.location_pin,
+                              color: Colors.white54, size: 20),
                           const SizedBox(width: 6),
                           Flexible(
                             child: Text(
                               hasValidCoordinates
-                                  ? (widget.scan['metadata']['location_name'] ?? 'Unknown Location')
+                                  ? (widget.scan['metadata']['location_name'] ??
+                                      'Unknown Location')
                                   : 'No location data available',
-                              style: const TextStyle(color: Colors.white, fontSize: 16),
+                              style: const TextStyle(
+                                  color: Colors.white, fontSize: 16),
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
@@ -1534,7 +1764,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
                   indicatorColor: Colors.blue,
                   labelColor: Colors.blue,
                   unselectedLabelColor: Colors.white54,
-                  labelStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  labelStyle: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.bold),
                   unselectedLabelStyle: const TextStyle(fontSize: 16),
                   tabs: const [
                     Tab(text: 'Overview'),
@@ -1548,7 +1779,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
                       controller: _tabController,
                       children: [
                         SingleChildScrollView(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 12),
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
@@ -1559,7 +1791,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
                           ),
                         ),
                         SingleChildScrollView(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 12),
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
@@ -1589,7 +1822,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
                           top: 16,
                           left: 16,
                           child: IconButton(
-                            icon: const Icon(Icons.close, color: Colors.white, size: 30),
+                            icon: const Icon(Icons.close,
+                                color: Colors.white, size: 30),
                             onPressed: () {
                               if (mounted) {
                                 setState(() => _isFullScreenMap = false);
@@ -1602,6 +1836,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
                   ),
                 ),
               ),
+            // Add the full-screen image viewer here
+            if (_isFullScreenImage) _buildFullScreenImageViewer(),
           ],
         ),
       ),

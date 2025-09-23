@@ -348,23 +348,6 @@ class SettingsScreen extends ConsumerWidget {
                             ),
                           ),
 
-                          const SizedBox(height: 18),
-                          
-                          // ---------- Sync Management ----------
-                          SyncManager(
-                            view: SyncManagerView.fullCard,
-                            backgroundColor: Colors.blue.withOpacity(0.08),
-                            iconColor: Colors.blue,
-                            onSyncComplete: () {
-                              // Show success message and refresh data
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Sync completed successfully'),
-                                  backgroundColor: Colors.green,
-                                ),
-                              );
-                            },
-                          ),
 
                           const SizedBox(height: 18),
                           _SectionDivider(label: 'Session'),

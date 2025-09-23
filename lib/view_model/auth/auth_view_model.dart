@@ -111,9 +111,9 @@ class AuthViewModel extends StateNotifier<AuthState> {
     }
   }
 
-  // -------------------------------------------------------------
-  // TRY RESTORE SESSION
-  // -------------------------------------------------------------
+  // =============================================================
+// TRY RESTORE SESSION (with token validation)
+// -------------------------------------------------------------
   Future<void> tryRestoreSession() async {
     final token = await AuthToken.getToken();
     if (token == null) {
@@ -122,27 +122,26 @@ class AuthViewModel extends StateNotifier<AuthState> {
     }
 
     state = state.copyWith(flow: AuthFlow.loading, isSubmitting: true);
+
     try {
-      // Mark authenticated with token first.
+      // Validate token with server by fetching profile
+      final profile = await _profileRepo.fetchProfile();
+
+      // If successful, token is valid
+      _ref.read(profileNotifierProvider.notifier).setProfile(profile);
       state = state.copyWith(
         flow: AuthFlow.authenticated,
         token: token,
+        profile: profile,
         isSubmitting: false,
       );
-      // Try to fetch profile but don't drop session on failure.
-      try {
-        final profile = await _profileRepo.fetchProfile();
-        _ref.read(profileNotifierProvider.notifier).setProfile(profile);
-        state = state.copyWith(profile: profile);
-      } catch (_) {
-        // ignore; UI remains authenticated and can retry later
-      }
-    } catch (_) {
-      await _authRepo.logout();
-      state = AuthState.initial();
+    } catch (e) {
+      // Token is invalid or network error
+      print('Token validation failed: $e');
+      await _authRepo.logout(); // Clear invalid token
+      state = AuthState.initial(); // Reset to unauthenticated state
     }
   }
-
   // -------------------------------------------------------------
   // LOGOUT (remote best-effort + local cleanup)
   // -------------------------------------------------------------

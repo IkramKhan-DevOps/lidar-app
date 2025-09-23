@@ -23,9 +23,13 @@ import GoogleMaps
         return "http://213.73.97.120/api/v1/scans/\(scanId)/process/"
     }
     private var autoSyncEnabled: Bool {
-        get { UserDefaults.standard.bool(forKey: "auto_sync_enabled") }
-        set { UserDefaults.standard.set(newValue, forKey: "auto_sync_enabled") }
+        get { true } // Always return true - permanently enabled
+        set { /* Ignore any attempts to set the value */ }
     }
+//    private var autoSyncEnabled: Bool {
+//        get { UserDefaults.standard.bool(forKey: "auto_sync_enabled") }
+//        set { UserDefaults.standard.set(newValue, forKey: "auto_sync_enabled") }
+//    }
 
     private func readAuthToken() -> String? {
         // Try common shared_preferences storage patterns
@@ -1169,49 +1173,90 @@ private func handleScanComplete(call: FlutterMethodCall, result: @escaping Flutt
 
         // If online, fetch from API and merge with local scans
         if isOnline {
+            // 1. Fetch API scans first
             fetchAPIScans { [weak self] apiScans in
-                guard self != nil else { return }
+                guard let self = self else { return }
 
                 DispatchQueue.main.async {
                     let localScans = ScanLocalStorage.shared.getAllScans()
                     var scanList: [[String: Any]] = []
 
-                    // Add API scans first (uploaded scans from server)
+                    // --- Add API scans ---
                     if let apiScans = apiScans {
-                        os_log("📡 [GET SAVED SCANS] Fetched %d scans from API", log: OSLog.default, type: .info, apiScans.count)
+                        os_log("📡 [GET SAVED SCANS] Fetched %d scans from API",
+                               log: OSLog.default, type: .info, apiScans.count)
                         for apiScan in apiScans {
                             let scanDict: [String: Any] = [
                                 "id": apiScan.scanID,
                                 "name": apiScan.name,
                                 "timestamp": apiScan.timestamp.timeIntervalSince1970,
-                                "status": apiScan.status, // Use actual status from API
+                                "status": apiScan.status,
                                 "imageCount": apiScan.imageCount,
                                 "modelSizeBytes": apiScan.modelSizeBytes ?? 0,
                                 "durationSeconds": apiScan.durationSeconds ?? 0.0,
-                                "folderPath": "", // API scans don't have local folder paths
-                                "hasUSDZ": false, // API scans don't have local USDZ files
+                                "folderPath": "",
+                                "hasUSDZ": false,
                                 "locationName": apiScan.locationName ?? "",
-                                "isFromAPI": true, // Flag to distinguish API scans
-                                "scanID": apiScan.scanID // Add scanID for compatibility
+                                "isFromAPI": true,
+                                "scanID": apiScan.scanID
                             ]
                             scanList.append(scanDict)
                         }
                     } else {
-                        os_log("⚠️ [GET SAVED SCANS] Failed to fetch API scans, falling back to local only", log: OSLog.default, type: .error)
+                        os_log("⚠️ [GET SAVED SCANS] Failed to fetch API scans",
+                               log: OSLog.default, type: .error)
                     }
 
-                    // Sort by timestamp (newest first)
-                    scanList.sort { (scan1, scan2) in
-                        let timestamp1 = scan1["timestamp"] as? TimeInterval ?? 0
-                        let timestamp2 = scan2["timestamp"] as? TimeInterval ?? 0
-                        return timestamp1 > timestamp2
+                    // --- Add local scans ---
+                    for scan in localScans {
+                        if let metadata = scan.metadata {
+                            let alreadyInAPI = scanList.contains { ($0["scanID"] as? String) == metadata.scanID }
+                            if !alreadyInAPI || metadata.status == "pending" || metadata.status == "failed" || metadata.status == "processing" {
+                                var scanDict: [String: Any] = [
+                                    "id": metadata.scanID,
+                                    "name": metadata.name,
+                                    "timestamp": metadata.timestamp.timeIntervalSince1970,
+                                    "status": metadata.status,
+                                    "imageCount": metadata.imageCount,
+                                    "modelSizeBytes": metadata.modelSizeBytes ?? 0,
+                                    "durationSeconds": metadata.durationSeconds ?? 0.0,
+                                    "folderPath": scan.url.path,
+                                    "hasUSDZ": ScanLocalStorage.shared.hasUSDZModel(in: scan.url),
+                                    "isFromAPI": false
+                                ]
+
+                                if let locationName = metadata.locationName {
+                                    scanDict["locationName"] = locationName
+                                }
+                                if let coordinates = metadata.coordinates, !coordinates.isEmpty {
+                                    scanDict["coordinates"] = coordinates
+                                }
+                                if let snapshotPath = metadata.snapshotPath {
+                                    scanDict["snapshotPath"] = snapshotPath
+                                }
+                                scanList.append(scanDict)
+                            }
+                        }
                     }
 
-                    os_log("📱 [GET SAVED SCANS] Returning %d total scans (API + Local)", log: OSLog.default, type: .info, scanList.count)
+                    // --- Sort newest first ---
+                    scanList.sort { ($0["timestamp"] as? TimeInterval ?? 0) > ($1["timestamp"] as? TimeInterval ?? 0) }
+
+                    os_log("📱 [GET SAVED SCANS] Returning %d total scans (API + Local)",
+                           log: OSLog.default, type: .info, scanList.count)
+
+                    // ✅ Return result immediately
                     result(["scans": scanList])
+
+                    // 🔥 Run sync in background, not blocking Flutter
+                    self.syncOfflineScansToServer { syncSuccess in
+                        os_log("📱 [GET SAVED SCANS] Offline scan sync completed with success: %@",
+                               log: OSLog.default, type: .info, syncSuccess ? "YES" : "NO")
+                    }
                 }
             }
-        } else {
+        }
+         else {
             // Offline: return only local scans
             DispatchQueue.main.async {
                 let localScans = ScanLocalStorage.shared.getAllScans()

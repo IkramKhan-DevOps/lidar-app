@@ -78,13 +78,12 @@ StateNotifierProvider<ProfileNotifier, ProfileState>((ref) {
 // Call actions:  ref.read(authViewModelProvider.notifier).login(...)
 // =============================================================
 // Auth view model (3 positional args)
-final authViewModelProvider =
-StateNotifierProvider<AuthViewModel, AuthState>((ref) {
+// Auth ViewModel Provider
+final authViewModelProvider = StateNotifierProvider<AuthViewModel, AuthState>((ref) {
   final authRepo = ref.watch(authRepositoryProvider);
   final profileRepo = ref.watch(profileRepositoryProvider);
   return AuthViewModel(authRepo, profileRepo, ref);
 });
-
 // =============================================================
 // ProfileEditViewModel
 // Handles loading/saving editable profile fields.

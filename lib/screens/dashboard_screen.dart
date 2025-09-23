@@ -28,6 +28,42 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   Timer? _refreshTimer;
   bool _isRefreshing = false;
 
+  void _showScanningGuidelines() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          backgroundColor: Colors.grey[850],
+          title: const Text(
+            'Scanning Guidelines',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: const [
+                _GuidelineItem(text: 'Hold device straight and steady.'),
+                _GuidelineItem(text: 'Keep 1–2m distance from object.'),
+                _GuidelineItem(text: 'Ensure good lighting.'),
+                _GuidelineItem(text: 'Clear background.'),
+                _GuidelineItem(text: 'Move slowly around object.'),
+                _GuidelineItem(text: 'Capture top & bottom angles.'),
+                _GuidelineItem(text: 'Avoid shiny or transparent surfaces.'),
+                _GuidelineItem(text: 'End where you started for alignment.'),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('GOT IT', style: TextStyle(color: Colors.blue)),
+            ),
+          ],
+        );
+      },
+    );
+  }
   @override
   void initState() {
     super.initState();
@@ -455,21 +491,23 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
         elevation: 0,
         title: const Text('LIBRARY', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 22)),
         actions: [
+          // Add the help icon button
+
           const NetworkStatusAppBarIndicator(),
           const SyncAppBarAction(),
-        IconButton(
-          icon: _isLoading
-              ? const SizedBox(
-            width: 20, // Smaller size
-            height: 20,
-            child: CircularProgressIndicator(
-              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-              strokeWidth: 1.5, // Thinner stroke for compact look
-            ),
-          )
-              : const Icon(Icons.refresh, color: Colors.white, size: 24), // Match icon size
-          onPressed: _handlePress,
-        ),
+          IconButton(
+            icon: _isLoading
+                ? const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                strokeWidth: 1.5,
+              ),
+            )
+                : const Icon(Icons.refresh, color: Colors.white, size: 24),
+            onPressed: _handlePress,
+          ),
           IconButton(
             icon: const Icon(Icons.view_list, color: Colors.white),
             onPressed: () => setState(() {
@@ -477,7 +515,6 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               _isFullScreenMap = false;
             }),
           ),
-
           IconButton(
             icon: const Icon(Icons.grid_view, color: Colors.white),
             onPressed: () => setState(() {
@@ -491,6 +528,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               currentView = 'map';
               _isFullScreenMap = true;
             }),
+          ),
+          IconButton(
+            icon: const Icon(Icons.help_outline, color: Colors.white),
+            onPressed: _showScanningGuidelines,
           ),
         ],
       ),
@@ -591,6 +632,32 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
 }
 
+
+// Helper widget for guideline items
+class _GuidelineItem extends StatelessWidget {
+  final String text;
+
+  const _GuidelineItem({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('• ', style: TextStyle(color: Colors.white, fontSize: 16)),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(color: Colors.white, fontSize: 16),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 class ProjectCard extends StatelessWidget {
   final String title;
   final String subtitle;

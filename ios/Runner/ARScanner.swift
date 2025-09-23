@@ -1346,17 +1346,86 @@ extension ARCamera.TrackingState: CustomStringConvertible {
         }
     }
 }
+// MARK: - InstructionsOverlay
+@available(iOS 13.4, *)
+class InstructionsOverlay: UIView {
+    private let titleLabel = UILabel()
+    private let instructionsStack = UIStackView()
 
+    private let instructions = [
+        "Hold device straight and steady.",
+        "Keep 1–2m distance from object.",
+        "Ensure good lighting.",
+        "Clear background.",
+        "Move slowly around object.",
+        "Capture top & bottom angles.",
+        "Avoid shiny or transparent surfaces.",
+        "End where you started for alignment."
+    ]
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        setupUI()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    private func setupUI() {
+        backgroundColor = UIColor.black.withAlphaComponent(0.8)
+        layer.cornerRadius = 12
+        translatesAutoresizingMaskIntoConstraints = false
+
+        // Title
+        titleLabel.text = "Scanning Instructions"
+        titleLabel.textColor = .white
+        titleLabel.font = .systemFont(ofSize: 18, weight: .bold)
+        titleLabel.textAlignment = .left
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        // Instructions stack
+        instructionsStack.axis = .vertical
+        instructionsStack.spacing = 8
+        instructionsStack.alignment = .fill  // CHANGE TO FILL
+        instructionsStack.translatesAutoresizingMaskIntoConstraints = false
+        // Add instructions
+        for instruction in instructions {
+            let instructionLabel = UILabel()
+            instructionLabel.text = "• \(instruction)"
+            instructionLabel.textColor = .white
+            instructionLabel.font = .systemFont(ofSize: 16, weight: .medium)
+            instructionLabel.numberOfLines = 0
+            instructionLabel.textAlignment = .left // ALIGN TEXT LEFT
+            instructionsStack.addArrangedSubview(instructionLabel)
+        }
+
+        addSubview(titleLabel)
+        addSubview(instructionsStack)
+
+        NSLayoutConstraint.activate([
+            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 16),
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+
+            instructionsStack.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 12),
+            instructionsStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            instructionsStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            instructionsStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16)
+        ])
+    }
+}
 @available(iOS 13.4, *)
 class ScanViewController: UIViewController, ARScannerDelegate {
     private let arScanner = ARScanner()
-    let captureManager = ScanCaptureManager()
-    let controlPanel = ControlPanel()
-    private let closeButton = UIButton(type: .system)
-    private var activityIndicator: UIActivityIndicatorView?
-    private var isPresentingPreview: Bool = false
-    private var channel: FlutterMethodChannel?
-    private var hasUploaded: Bool = false // Add flag to prevent double uploads
+       let captureManager = ScanCaptureManager()
+       let controlPanel = ControlPanel()
+       private let closeButton = UIButton(type: .system)
+       private var activityIndicator: UIActivityIndicatorView?
+       private var isPresentingPreview: Bool = false
+       private var channel: FlutterMethodChannel?
+       private var hasUploaded: Bool = false
+       private let instructionsOverlay = InstructionsOverlay() // ADD THIS LINE
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -1394,16 +1463,18 @@ class ScanViewController: UIViewController, ARScannerDelegate {
         }
     }
 
-    private func setupUI() {
-        view.backgroundColor = .black
+private func setupUI() {
+    view.backgroundColor = .black
 
-        view.addSubview(arScanner.view)
-        view.addSubview(controlPanel)
-        view.addSubview(closeButton)
+    view.addSubview(arScanner.view)
+    view.addSubview(controlPanel)
+    view.addSubview(closeButton)
+    view.addSubview(instructionsOverlay) // ADD THIS LINE
 
         arScanner.view.translatesAutoresizingMaskIntoConstraints = false
         controlPanel.translatesAutoresizingMaskIntoConstraints = false
         closeButton.translatesAutoresizingMaskIntoConstraints = false
+        instructionsOverlay.translatesAutoresizingMaskIntoConstraints = false
 
         closeButton.setImage(UIImage(systemName: "xmark"), for: .normal)
         closeButton.tintColor = .white
@@ -1424,8 +1495,15 @@ class ScanViewController: UIViewController, ARScannerDelegate {
             closeButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 10),
             closeButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -10),
             closeButton.widthAnchor.constraint(equalToConstant: 40),
-            closeButton.heightAnchor.constraint(equalToConstant: 40)
+            closeButton.heightAnchor.constraint(equalToConstant: 40),
+                    // Add these constraints for instructions overlay
+                    instructionsOverlay.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+                    instructionsOverlay.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: -50),
+                    instructionsOverlay.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 40),
+                    instructionsOverlay.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -40)
         ])
+            // Initially show instructions
+            instructionsOverlay.isHidden = false
     }
 
     private func setupDelegates() {
@@ -1490,7 +1568,7 @@ class ScanViewController: UIViewController, ARScannerDelegate {
         } else if hasUploaded {
             os_log("🚪 [CLOSE] Close button tapped, upload already completed", log: OSLog.default, type: .info)
         }
-        
+
         arScanner.stopScan()
         captureManager.cleanupCaptureDirectory()
         // Don't remove temp folder here as it might be needed for upload
@@ -1540,8 +1618,9 @@ class ScanViewController: UIViewController, ARScannerDelegate {
     func arScannerDidStopScanning(_ scanner: ARScanner) {
         DispatchQueue.main.async {
             self.activityIndicator?.stopAnimating()
-            self.controlPanel.updateUIForScanningState(isScanning: false,
+            self.controlPanel.updateUIForScanningState(isScanning: scanner.isScanning,
                                                       hasMeshes: !scanner.getCapturedMeshes().isEmpty)
+
             if !scanner.getCapturedMeshes().isEmpty {
                 // Show the model view as before
                 self.showModelView()
@@ -1550,7 +1629,7 @@ class ScanViewController: UIViewController, ARScannerDelegate {
             }
         }
     }
-    
+
 
     func arScanner(_ scanner: ARScanner, showAlertWithTitle title: String, message: String) {
         showAlert(title: title, message: message)
@@ -1622,7 +1701,6 @@ class ScanViewController: UIViewController, ARScannerDelegate {
             object: nil,
             userInfo: ["folderPath": folderPath]
         )
-        
         result("Upload request sent to AppDelegate")
     }
 }
@@ -1637,6 +1715,12 @@ extension ScanViewController: ScanCaptureManagerDelegate {
                 title: "Storage Full",
                 message: "Storage is full! Clear some space or process your scan."
             )
+        }
+    }
+    private func updateInstructionsVisibility(isScanning: Bool) {
+        UIView.animate(withDuration: 0.3) {
+            self.instructionsOverlay.alpha = isScanning ? 0 : 1
+            self.instructionsOverlay.isHidden = isScanning
         }
     }
 
@@ -1657,11 +1741,14 @@ extension ScanViewController: ControlPanelDelegate {
     func controlPanelDidTapStart(_ controlPanel: ControlPanel) {
         arScanner.startScan()
         generateHapticFeedback()
+            updateInstructionsVisibility(isScanning: true) // ADD THIS LINE
+
     }
 
     func controlPanelDidTapStop(_ controlPanel: ControlPanel) {
         arScanner.stopScan()
         generateHapticFeedback()
+
     }
 }
 
@@ -2061,6 +2148,75 @@ class ModelViewController: UIViewController, QLPreviewControllerDataSource, UIDo
             channel = FlutterMethodChannel(name: "com.demo.channel/message", binaryMessenger: flutterController.binaryMessenger)
         } else {
             os_log("Failed to initialize Flutter method channel", log: OSLog.default, type: .error)
+        }
+    }
+    // MARK: - InstructionsOverlay
+    @available(iOS 13.4, *)
+    class InstructionsOverlay: UIView {
+        private let titleLabel = UILabel()
+        private let instructionsStack = UIStackView()
+
+        private let instructions = [
+            "Hold device straight and steady.",
+            "Keep 1–2m distance from object.",
+            "Ensure good lighting.",
+            "Clear background.",
+            "Move slowly around object.",
+            "Capture top & bottom angles.",
+            "Avoid shiny or transparent surfaces.",
+            "End where you started for alignment."
+        ]
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            setupUI()
+        }
+
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        private func setupUI() {
+            backgroundColor = UIColor.black.withAlphaComponent(0.8)
+            layer.cornerRadius = 12
+            translatesAutoresizingMaskIntoConstraints = false
+
+            // Title
+            titleLabel.text = "Scanning Instructions"
+            titleLabel.textColor = .white
+            titleLabel.font = .systemFont(ofSize: 18, weight: .bold)
+            titleLabel.textAlignment = .center
+            titleLabel.translatesAutoresizingMaskIntoConstraints = false
+
+            // Instructions stack
+            instructionsStack.axis = .vertical
+            instructionsStack.spacing = 8
+            instructionsStack.alignment = .leading
+            instructionsStack.translatesAutoresizingMaskIntoConstraints = false
+
+            // Add instructions
+            for instruction in instructions {
+                let instructionLabel = UILabel()
+                instructionLabel.text = "• \(instruction)"
+                instructionLabel.textColor = .white
+                instructionLabel.font = .systemFont(ofSize: 14)
+                instructionLabel.numberOfLines = 0
+                instructionsStack.addArrangedSubview(instructionLabel)
+            }
+
+            addSubview(titleLabel)
+            addSubview(instructionsStack)
+
+            NSLayoutConstraint.activate([
+                titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 16),
+                titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+                titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+
+                instructionsStack.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 12),
+                instructionsStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+                instructionsStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+                instructionsStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16)
+            ])
         }
     }
     
