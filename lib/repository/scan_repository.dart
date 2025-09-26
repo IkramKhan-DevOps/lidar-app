@@ -147,6 +147,22 @@ class ScanRepository {
       return false;
     }
   }
+  Future<Map<String, dynamic>> generateGeoTiff(int scanId) async {
+    try {
+      final res = await api.getAPI(
+        APIUrl.generateGeoTiff(scanId),
+        true,
+      );
+      if (res is Map<String, dynamic>) {
+        return res;
+      }
+      throw Exception('Unexpected response format for GeoTIFF generation');
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+
 
   // -----------------------------------------------------------
   // uploadScan

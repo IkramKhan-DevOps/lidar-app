@@ -77,6 +77,8 @@ class APIUrl {
   static String scanDeleteById(int id) => '${AppConfig.v1}scans/$id/';
   static String scanDownloadById(int id) => '${AppConfig.v1}scans/$id/download-zip/';
 
+  static String generateGeoTiff(int scanId) => '${AppConfig.v1}scans/$scanId/generate-geotiff/';
+
   static String get scansProcess => '${AppConfig.v1}scans/process/';
 
   // Nested

@@ -1,5 +1,9 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
+import 'dart:ui';
+import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -7,12 +11,13 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../repository/scan_repository.dart';
 import '../core/network/api_network.dart';
-import '../core/network/api_urls.dart';
 import '../models/scan_detail_model.dart';
 import '../settings/providers/global_provider.dart';
 import '../widgets/model_viewer.dart';
-import '../core/errors/app_exceptions.dart';
-import 'dashboard_screen.dart';
+import 'package:dio/dio.dart';
+import 'package:path_provider/path_provider.dart';
+
+import 'geotiff_download_screen.dart';
 
 class ModelDetailScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> scan;
@@ -46,14 +51,16 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
   bool _isFromAPI = false;
   bool _isFullScreenImage = false;
   String? _fullScreenImageUrl;
-
-  @override
-  void initState() {
+  Set<Marker> _mapMarkers = {};
+  bool _areMarkersLoading = false;
+  List<Map<String, dynamic>> _intervalImages = [];
+  @override void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
-    _scanRepository = ScanRepository(NetworkApiService());
-    _isFromAPI = widget.scan['isFromAPI'] == true;
-    _startAutoRefreshTimer();
+    _tabController = TabController(length: 3, vsync: this, initialIndex: 1); // Changed to make 3D View (index 1) the default tab
+     _scanRepository = ScanRepository(NetworkApiService());
+     _isFromAPI = widget.scan['isFromAPI'] == true;
+     _startAutoRefreshTimer();
+
     if (widget.scan['metadata'] == null) {
       widget.scan['metadata'] = <String, dynamic>{
         'scan_id': widget.scan['scanID'] ??
@@ -61,8 +68,7 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
             widget.scan['folderPath']?.split('/').last ??
             'unknown',
         'name': widget.scan['name'] ?? widget.scan['title'] ?? 'Unnamed Scan',
-        'timestamp':
-            widget.scan['timestamp'] ?? DateTime.now().toIso8601String(),
+        'timestamp': widget.scan['timestamp'] ?? DateTime.now().toIso8601String(),
         'location_name': widget.scan['locationName'] ?? '',
         'coordinates': widget.scan['coordinates'] ?? [],
         'image_count': widget.scan['imageCount'] ?? 0,
@@ -72,17 +78,56 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
         'duration_seconds': widget.scan['duration_seconds'] ?? 0.0,
       };
     }
-    widget.scan['snapshotPath'] =
-        widget.scan['snapshotPath'] ?? widget.scan['metadata']['snapshot_path'];
-    _nameController = TextEditingController(
-        text: widget.scan['metadata']['name'] ?? 'Unnamed Scan');
+
+    widget.scan['snapshotPath'] = widget.scan['snapshotPath'] ?? widget.scan['metadata']['snapshot_path'];
+    _nameController = TextEditingController(text: widget.scan['metadata']['name'] ?? 'Unnamed Scan');
+
+// Add tab controller listener
+    _tabController.addListener(_handleTabChange);
+
+// Pre-load markers immediately
+    _preloadMarkers();
+
     if (_isFromAPI) {
       _loadApiScanData();
     } else {
       _fetchImagePaths();
       _syncStatusWithMetadata();
     }
+
     platform.setMethodCallHandler(_handleMethodCall);
+  }
+
+// Add this method to pre-load markers
+  void _preloadMarkers() async {
+    // Load basic markers immediately
+    final points = _getCoordinatePoints();
+    if (points.isNotEmpty) {
+      final basicMarkers = await _createBasicMarkers(points);
+      if (mounted) {
+        setState(() {
+          _mapMarkers = basicMarkers;
+        });
+      }
+    }
+  }
+  void _handleTabChange() {
+    if (_tabController.index == 0 && mounted) { // Overview tab
+      // Small delay to ensure the map is built before reloading markers
+      Future.delayed(Duration(milliseconds: 100), () {
+        if (mounted) {
+          _loadMapMarkers(isFullScreen: _isFullScreenMap);
+        }
+      });
+    }
+  }
+// Add this new method to load markers with proper delay
+  void _loadMarkersWithDelay() {
+    Future.delayed(Duration(milliseconds: 800), () {
+      if (mounted) {
+        _loadMapMarkers(isFullScreen: _isFullScreenMap);
+      }
+    });
   }
 
   @override
@@ -93,6 +138,95 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
     _mapController?.dispose();
     platform.setMethodCallHandler(null);
     super.dispose();
+  }
+// And update your _downloadGeoTiff method:
+  Future<void> _downloadGeoTiff() async {
+    if (_isProcessing) return;
+
+    if (mounted) {
+      setState(() {
+        _isProcessing = true;
+      });
+    }
+
+    try {
+      final scanId = widget.scan['metadata']?['scan_id'] ?? widget.scan['id'];
+      if (scanId == null) {
+        throw Exception('Scan ID not found');
+      }
+
+      final scanIdInt = scanId is int ? scanId : int.tryParse(scanId.toString());
+      if (scanIdInt == null) {
+        throw Exception('Invalid scan ID: $scanId');
+      }
+
+      // Show initial snackbar
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+            'Preparing GeoTIFF download...',
+            style: TextStyle(color: Colors.white, fontSize: 14),
+          ),
+          backgroundColor: Colors.blue[800],
+          duration: const Duration(seconds: 2),
+        ),
+      );
+
+      // Call the API to generate and get GeoTIFF download URL
+      final response = await _scanRepository!.generateGeoTiff(scanIdInt);
+
+      if (response['status'] == 'ok' && response['zip_file'] != null) {
+        final zipUrl = response['zip_file'] as String;
+        final fileName = '${widget.scan['metadata']['name']}_geotiff.zip';
+
+        // Navigate to download screen
+        final result = await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => GeoTiffDownloadScreen(
+              downloadUrl: zipUrl,
+              fileName: fileName,
+              scanName: widget.scan['metadata']['name'] ?? 'Unnamed Scan',
+            ),
+          ),
+        );
+
+        // Show success message if download was completed
+        if (result == true && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text(
+                'GeoTIFF file downloaded successfully!',
+                style: TextStyle(color: Colors.white, fontSize: 14),
+              ),
+              backgroundColor: Colors.green[800],
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+      } else {
+        throw Exception('Failed to generate GeoTIFF: ${response['message'] ?? 'Unknown error'}');
+      }
+    } catch (e) {
+      print('Error downloading GeoTIFF: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Failed to download GeoTIFF: ${e.toString()}',
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+            ),
+            backgroundColor: Colors.red[800],
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+        });
+      }
+    }
   }
 
   String _formatDuration(double? durationSeconds) {
@@ -127,7 +261,7 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
               _status == 'uploaded') {
             _statusRefreshTimer.cancel();
             if (_status == 'completed') {
-              _tabController.animateTo(1); // Switch to 3D View tab
+              _tabController.animateTo(1);
             }
           }
         }
@@ -192,9 +326,6 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
             _isLoadingApiData = false;
           });
           _updateScanMetadataFromApi(apiScanDetail);
-          if (_status == 'completed') {
-            _tabController.animateTo(0); // Switch to 3D View tab
-          }
         }
       } else {
         throw Exception('Invalid scan ID: $scanId');
@@ -252,6 +383,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
     }
   }
 
+
+
   String _getApiStatusMessage(String status) {
     switch (status.toLowerCase()) {
       case 'completed':
@@ -261,7 +394,7 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       case 'uploaded':
         return 'Scan uploaded successfully';
       case 'failed':
-        return 'SScan processing failed Kindly Scan Properly and Try again.';
+        return 'Scan processing failed. Kindly try again.';
       case 'pending':
       default:
         return 'Scan is pending processing';
@@ -299,7 +432,7 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
             _statusMessage = 'Tap to view 3D model';
             widget.scan['metadata']['status'] = 'uploaded';
             widget.scan['usdzPath'] = '$folderPath/model.usdz';
-            _tabController.animateTo(1); // Switch to 3D View tab
+            _tabController.animateTo(1);
           });
         }
       }
@@ -356,43 +489,45 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
 
   Future<void> _handleMethodCall(MethodCall call) async {
     if (!mounted) return;
+    final arguments = call.arguments as Map<dynamic, dynamic>? ?? {};
     if (call.method == 'processingComplete') {
-      final folderPath = call.arguments['usdzPath']?.toString();
+      final folderPath = arguments['usdzPath']?.toString();
       if (folderPath != null &&
-          folderPath.contains(widget.scan['folderPath'])) {
+          folderPath.contains(widget.scan['folderPath']?.toString() ?? '')) {
         if (mounted) {
           setState(() {
             _status = 'uploaded';
             _statusMessage = 'Tap to view 3D model';
             _isProcessing = false;
             widget.scan['metadata']['status'] = 'uploaded';
-            widget.scan['usdzPath'] = call.arguments['usdzPath'];
-            if (call.arguments['snapshotPath'] != null) {
-              widget.scan['snapshotPath'] = call.arguments['snapshotPath'];
+            widget.scan['usdzPath'] = arguments['usdzPath'];
+            if (arguments['snapshotPath'] != null) {
+              widget.scan['snapshotPath'] = arguments['snapshotPath'];
             }
-            _tabController.animateTo(1); // Switch to 3D View tab
+            _tabController.animateTo(1);
           });
         }
       }
     } else if (call.method == 'scanComplete') {
-      final folderPath = call.arguments['folderPath']?.toString();
-      if (folderPath != null && folderPath == widget.scan['folderPath']) {
+      final folderPath = arguments['folderPath']?.toString();
+      if (folderPath != null &&
+          folderPath == widget.scan['folderPath']?.toString()) {
         if (mounted) {
           setState(() {
             widget.scan['metadata'] = <String, dynamic>{
               ...widget.scan['metadata'],
-              'scan_id': call.arguments['scanID'] ??
-                  widget.scan['metadata']['scan_id'],
-              'name': call.arguments['name'] ?? widget.scan['metadata']['name'],
-              'timestamp': call.arguments['timestamp'] ??
+              'scan_id':
+                  arguments['scanID'] ?? widget.scan['metadata']['scan_id'],
+              'name': arguments['name'] ?? widget.scan['metadata']['name'],
+              'timestamp': arguments['timestamp'] ??
                   widget.scan['metadata']['timestamp'],
-              'location_name': call.arguments['locationName'] ??
+              'location_name': arguments['locationName'] ??
                   widget.scan['metadata']['location_name'],
-              'coordinates': call.arguments['coordinates'] ??
+              'coordinates': arguments['coordinates'] ??
                   widget.scan['metadata']['coordinates'],
-              'image_count': call.arguments['imageCount'] ??
+              'image_count': arguments['imageCount'] ??
                   widget.scan['metadata']['image_count'],
-              'duration_seconds': call.arguments['durationSeconds'] ??
+              'duration_seconds': arguments['durationSeconds'] ??
                   widget.scan['metadata']['duration_seconds'],
               'status': 'pending',
             };
@@ -405,7 +540,7 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
         }
       }
     } else if (call.method == 'updateProcessingStatus') {
-      final status = call.arguments['status']?.toString() ?? 'processing';
+      final status = arguments['status']?.toString() ?? 'processing';
       if (mounted) {
         setState(() {
           _isProcessing = true;
@@ -568,8 +703,7 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
         setState(() {
           _isProcessing = false;
           _status = 'failed';
-          _statusMessage =
-              'Scan processing failed Kindly Scan Properly and Try again.';
+          _statusMessage = 'Scan processing failed. Kindly try again.';
           _errorDetails = e.message;
           widget.scan['metadata']['status'] = 'failed';
         });
@@ -615,7 +749,7 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
           if (result['snapshotPath'] != null) {
             widget.scan['snapshotPath'] = result['snapshotPath'];
           }
-          _tabController.animateTo(1); // Switch to 3D View tab
+          _tabController.animateTo(1);
         });
       }
       await platform.invokeMethod(
@@ -790,6 +924,40 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
     }
   }
 
+  double _calculateDistance(LatLng point1, LatLng point2) {
+    const double earthRadius = 6371000; // meters
+    final double lat1 = point1.latitude * (pi / 180);
+    final double lon1 = point1.longitude * (pi / 180);
+    final double lat2 = point2.latitude * (pi / 180);
+    final double lon2 = point2.longitude * (pi / 180);
+
+    final double dLat = lat2 - lat1;
+    final double dLon = lon2 - lon1;
+
+    final double a = sin(dLat / 2) * sin(dLat / 2) +
+        cos(lat1) * cos(lat2) * sin(dLon / 2) * sin(dLon / 2);
+    final double c = 2 * atan2(sqrt(a), sqrt(1 - a));
+
+    return earthRadius * c;
+  }
+
+  Future<Uint8List> _loadNetworkImage(String imageUrl) async {
+    final HttpClientRequest request =
+        await HttpClient().getUrl(Uri.parse(imageUrl));
+    final HttpClientResponse response = await request.close();
+    final Uint8List bytes = await consolidateHttpClientResponseBytes(response);
+    return bytes;
+  }
+
+  void _showImagePreview(String imagePath) {
+    if (mounted) {
+      setState(() {
+        _isFullScreenImage = true;
+        _fullScreenImageUrl = imagePath;
+      });
+    }
+  }
+
   void _showDeleteConfirmationDialog() {
     showDialog(
       context: context,
@@ -901,69 +1069,225 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
     );
   }
 
-  Widget _buildMap({bool isFullScreen = false}) {
+// Replace your current _loadMapMarkers method with this:
+  void _loadMapMarkers({bool isFullScreen = false}) async {
+    if (mounted) {
+      setState(() {
+        _areMarkersLoading = true;
+      });
+    }
+
+    final points = _getCoordinatePoints();
+
+    // Always create basic markers for both fullscreen and regular view
+    final markers = await _createBasicMarkers(points);
+
+    if (mounted) {
+      setState(() {
+        _mapMarkers = markers;
+        _areMarkersLoading = false;
+      });
+    }
+
+    // If we're in fullscreen mode and have points, load the image markers
+    if (isFullScreen && points.isNotEmpty) {
+      _loadImageMarkersForFullScreen(points);
+    }
+  }
+
+// Add this new method for fullscreen image markers
+  void _loadImageMarkersForFullScreen(List<LatLng> points) async {
+    if (mounted) {
+      setState(() {
+        _areMarkersLoading = true;
+      });
+    }
+
+    // Create placeholder markers first
+    final placeholderMarkers = await _createPlaceholderMarkers(points);
+    if (mounted) {
+      setState(() {
+        _mapMarkers = placeholderMarkers;
+      });
+    }
+
+    // Then load actual image markers
+    final actualMarkers = await _createActualImageMarkers(points);
+    if (mounted) {
+      setState(() {
+        _mapMarkers = actualMarkers;
+        _areMarkersLoading = false;
+      });
+    }
+  }
+  Future<Set<Marker>> _createBasicMarkers(List<LatLng> points) async {
+    Set<Marker> markers = {};
+
+    if (points.isNotEmpty) {
+      // Always add start marker
+      markers.add(Marker(
+        markerId: const MarkerId('start_point'),
+        position: points.first,
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+        onTap: () {
+          _handleMarkerTap(points.first, 'start');
+        },
+      ));
+
+      // Add end marker if there are multiple points
+      if (points.length > 1) {
+        markers.add(Marker(
+          markerId: const MarkerId('end_point'),
+          position: points.last,
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
+          onTap: () {
+            _handleMarkerTap(points.last, 'end');
+          },
+        ));
+      }
+    }
+
+    return markers;
+  }
+
+// Add this new method to handle marker taps
+  void _handleMarkerTap(LatLng position, String markerType) {
+    // First try to get topViewImage from API data
+    final topViewImage = _apiScanDetail?.pointCloud?.topViewImage;
+
+    if (topViewImage != null && topViewImage.isNotEmpty) {
+      if (mounted) {
+        setState(() {
+          _selectedTopViewImage = topViewImage;
+          _selectedMarkerPosition = position;
+        });
+      }
+    } else {
+      // Fallback: Try to get from local data or show a message
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Top-down view not available for this ${markerType} point',
+              style: TextStyle(color: Colors.white, fontSize: 14),
+            ),
+            backgroundColor: Colors.orange[800],
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    }
+  }
+  Future<Set<Marker>> _createPlaceholderMarkers(List<LatLng> points) async {
+    Set<Marker> markers = {};
+
+    _intervalImages = _getImagesAtIntervals(
+      points,
+      _isFromAPI && _apiScanDetail != null && _apiScanDetail!.images.isNotEmpty
+          ? _apiScanDetail!.images.map((img) => img.image).toList()
+          : imagePaths,
+      intervalMeters: 1,
+    );
+
+    for (int i = 0; i < _intervalImages.length; i++) {
+      final imageData = _intervalImages[i];
+      final placeholderIcon = await _createPlaceholderMarkerIcon();
+
+      markers.add(Marker(
+        markerId: MarkerId('marker_$i'),
+        position: imageData['position'] as LatLng,
+        icon: placeholderIcon,
+        anchor: const Offset(0.5, 0.5),
+      ));
+    }
+
+    return markers;
+  }
+
+  Future<Set<Marker>> _createActualImageMarkers(List<LatLng> points) async {
+    Set<Marker> markers = {};
+
+    for (int i = 0; i < _intervalImages.length; i++) {
+      final imageData = _intervalImages[i];
+
+      try {
+        final markerIcon =
+            await _createCustomMarkerIcon(imageData['imagePath'] as String);
+
+        markers.add(Marker(
+          markerId: MarkerId('marker_$i'),
+          position: imageData['position'] as LatLng,
+          icon: markerIcon,
+          onTap: () {
+            _showImagePreview(imageData['imagePath'] as String);
+          },
+          anchor: const Offset(0.5, 0.5),
+        ));
+      } catch (e) {
+        print('Error loading image marker $i: $e');
+        final placeholderIcon = await _createPlaceholderMarkerIcon();
+        markers.add(Marker(
+          markerId: MarkerId('marker_$i'),
+          position: imageData['position'] as LatLng,
+          icon: placeholderIcon,
+          anchor: const Offset(0.5, 0.5),
+        ));
+      }
+    }
+
+    return markers;
+  }
+
+  List<LatLng> _getCoordinatePoints() {
     final rawCoordinates =
         widget.scan['metadata']['coordinates'] as List<dynamic>?;
+    if (rawCoordinates == null || rawCoordinates.isEmpty) return [];
+
+    final coordinates = rawCoordinates
+        .map((coord) {
+          if (coord is List<dynamic> && coord.length >= 2) {
+            return [
+              double.tryParse(coord[0].toString()) ?? 0.0,
+              double.tryParse(coord[1].toString()) ?? 0.0
+            ];
+          }
+          return null;
+        })
+        .whereType<List<double>>()
+        .toList();
+
+    return coordinates
+        .map((coord) => LatLng(coord[0], coord[1]))
+        .where((point) => point.latitude != 0.0 && point.longitude != 0.0)
+        .toList();
+  }
+
+  Widget _buildMap({bool isFullScreen = false}) {
+    final points = _getCoordinatePoints();
     final defaultPosition = const LatLng(0.0, 0.0);
     const defaultZoom = 2.0;
-    List<LatLng> points = [];
+
     Map<String, LatLng>? bounds;
     LatLng center = defaultPosition;
     double zoom = defaultZoom;
-    if (rawCoordinates != null && rawCoordinates.isNotEmpty) {
-      final coordinates = rawCoordinates
-          .map((coord) {
-            if (coord is List<dynamic> && coord.length >= 2) {
-              return [
-                double.tryParse(coord[0].toString()) ?? 0.0,
-                double.tryParse(coord[1].toString()) ?? 0.0
-              ];
-            }
-            return null;
-          })
-          .whereType<List<double>>()
-          .toList();
-      points = coordinates
-          .map((coord) => LatLng(coord[0], coord[1]))
-          .where((point) => point.latitude != 0.0 && point.longitude != 0.0)
-          .toList();
-      if (points.isNotEmpty) {
-        bounds = _calculateBounds(points);
-        center = bounds['center'] as LatLng;
-        zoom = 15.0;
-      }
+
+    if (points.isNotEmpty) {
+      bounds = _calculateBounds(points);
+      center = bounds['center'] as LatLng;
+      zoom = 15.0;
     }
+
     final polylines = points.isNotEmpty
         ? <Polyline>{
-            Polyline(
-              polylineId: const PolylineId('scan_path'),
-              points: points,
-              color: Colors.blue,
-              width: 4,
-            ),
-          }
+      Polyline(
+        polylineId: const PolylineId('scan_path'),
+        points: points,
+        color: Colors.blue,
+        width: 4,
+      ),
+    }
         : <Polyline>{};
-    final markers = points.isNotEmpty
-        ? <Marker>{
-            Marker(
-              markerId: const MarkerId('start_point'),
-              position: points.first,
-              icon: BitmapDescriptor.defaultMarkerWithHue(
-                  BitmapDescriptor.hueRed),
-              onTap: () {
-                final topViewImage = _apiScanDetail?.pointCloud?.topViewImage;
-                if (topViewImage != null && topViewImage.isNotEmpty) {
-                  if (mounted) {
-                    setState(() {
-                      _selectedTopViewImage = topViewImage;
-                      _selectedMarkerPosition = points.first;
-                    });
-                  }
-                }
-              },
-            ),
-          }
-        : <Marker>{};
+
     return Stack(
       children: [
         ClipRRect(
@@ -973,16 +1297,27 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
             child: GoogleMap(
               onMapCreated: (GoogleMapController controller) {
                 _mapController = controller;
+
+                // Load markers immediately when map is ready
+                if (mounted) {
+                  _loadMapMarkers(isFullScreen: isFullScreen);
+                }
+
                 if (points.isNotEmpty && bounds != null) {
-                  _mapController?.animateCamera(
-                    CameraUpdate.newLatLngBounds(
-                      LatLngBounds(
-                        southwest: bounds['southwest'] as LatLng,
-                        northeast: bounds['northeast'] as LatLng,
-                      ),
-                      50.0,
-                    ),
-                  );
+                  // Small delay to ensure markers are loaded before camera animation
+                  Future.delayed(Duration(milliseconds: 300), () {
+                    if (_mapController != null) {
+                      _mapController!.animateCamera(
+                        CameraUpdate.newLatLngBounds(
+                          LatLngBounds(
+                            southwest: bounds!['southwest'] as LatLng,
+                            northeast: bounds!['northeast'] as LatLng,
+                          ),
+                          50.0,
+                        ),
+                      );
+                    }
+                  });
                 } else {
                   _mapController?.animateCamera(
                     CameraUpdate.newCameraPosition(
@@ -995,8 +1330,8 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
                 target: center,
                 zoom: zoom,
               ),
-              polylines: points.isNotEmpty ? polylines : <Polyline>{},
-              markers: points.isNotEmpty ? markers : <Marker>{},
+              polylines: polylines,
+              markers: _mapMarkers, // Use the current markers state
               myLocationEnabled: true,
               myLocationButtonEnabled: true,
               zoomControlsEnabled: false,
@@ -1004,6 +1339,73 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
             ),
           ),
         ),
+
+        // Show loading indicator when markers are loading initially
+        if (_areMarkersLoading && _mapMarkers.isEmpty)
+          Positioned.fill(
+            child: Container(
+              color: Colors.black54,
+              child: Center(
+                child: Container(
+                  padding: EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.black87,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                        ),
+                      ),
+                      SizedBox(width: 12),
+                      Text(
+                        'Loading scan locations...',
+                        style: TextStyle(color: Colors.white, fontSize: 14),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+        if (_areMarkersLoading && isFullScreen)
+          Positioned(
+            top: 10,
+            right: 10,
+            child: Container(
+              padding: EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.black54,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    ),
+                  ),
+                  SizedBox(width: 8),
+                  Text(
+                    'Loading images...',
+                    style: TextStyle(color: Colors.white, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
         if (!isFullScreen && points.isNotEmpty)
           Positioned(
             bottom: 8,
@@ -1016,12 +1418,14 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
                   setState(() {
                     _isFullScreenMap = true;
                   });
+                  _loadMapMarkers(isFullScreen: true);
                 }
               },
               child: const Icon(Icons.fullscreen, size: 20),
             ),
           ),
-        if (_selectedTopViewImage != null && _selectedMarkerPosition != null)
+
+        if (!isFullScreen && _selectedTopViewImage != null && _selectedMarkerPosition != null)
           Positioned(
             top: 16,
             right: 16,
@@ -1053,7 +1457,7 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
                         child: CircularProgressIndicator(
                           value: loadingProgress.expectedTotalBytes != null
                               ? loadingProgress.cumulativeBytesLoaded /
-                                  loadingProgress.expectedTotalBytes!
+                              loadingProgress.expectedTotalBytes!
                               : null,
                         ),
                       );
@@ -1069,6 +1473,179 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
           ),
       ],
     );
+  }
+  Future<BitmapDescriptor> _createPlaceholderMarkerIcon() async {
+    try {
+      final pictureRecorder = ui.PictureRecorder();
+      final canvas = Canvas(pictureRecorder);
+      final size = Size(60, 60);
+
+      final cardPaint = Paint()
+        ..color = Colors.grey[800]!
+        ..style = PaintingStyle.fill;
+
+      final borderPaint = Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2;
+
+      final cardRect = Rect.fromLTWH(0, 0, size.width, size.height);
+      final cardRadius = Radius.circular(8);
+
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(cardRect, cardRadius),
+        cardPaint,
+      );
+
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(cardRect, cardRadius),
+        borderPaint,
+      );
+
+      final loadingPaint = Paint()
+        ..color = Colors.blue
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3;
+
+      final center = Offset(size.width / 2, size.height / 2);
+      final radius = size.width / 4;
+
+      canvas.drawCircle(center, radius, loadingPaint);
+
+      final textPainter = TextPainter(
+        textDirection: ui.TextDirection.ltr,
+      );
+
+      textPainter.text = TextSpan(
+        text: '📷',
+        style: TextStyle(
+          fontSize: 20,
+          color: Colors.white,
+        ),
+      );
+
+      textPainter.layout();
+      textPainter.paint(
+        canvas,
+        Offset(
+          center.dx - textPainter.width / 2,
+          center.dy - textPainter.height / 2,
+        ),
+      );
+
+      final picture = pictureRecorder.endRecording();
+      final image =
+          await picture.toImage(size.width.toInt(), size.height.toInt());
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+
+      if (byteData == null) {
+        return BitmapDescriptor.defaultMarker;
+      }
+
+      return BitmapDescriptor.fromBytes(byteData.buffer.asUint8List());
+    } catch (e) {
+      print('Error creating placeholder marker: $e');
+      return BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange);
+    }
+  }
+
+  List<Map<String, dynamic>> _getImagesAtIntervals(
+      List<LatLng> points, List<String> images,
+      {double intervalMeters = 1}) {
+    if (points.isEmpty || images.isEmpty) return [];
+
+    List<Map<String, dynamic>> intervalImages = [];
+    double accumulatedDistance = 0;
+    LatLng previousPoint = points.first;
+
+    double totalDistance = 0;
+    for (int i = 1; i < points.length; i++) {
+      totalDistance += _calculateDistance(points[i - 1], points[i]);
+    }
+
+    int maxImages = images.length > 10 ? 10 : images.length;
+    double targetInterval = totalDistance / maxImages;
+
+    if (targetInterval < intervalMeters) {
+      targetInterval = intervalMeters;
+    }
+
+    for (int i = 0; i < points.length; i++) {
+      if (i > 0) {
+        accumulatedDistance += _calculateDistance(previousPoint, points[i]);
+        previousPoint = points[i];
+      }
+
+      if (accumulatedDistance >= targetInterval ||
+          i == 0 ||
+          i == points.length - 1) {
+        int imageIndex = (i * images.length ~/ points.length) % images.length;
+
+        intervalImages.add({
+          'position': points[i],
+          'imagePath': images[imageIndex],
+          'distance': accumulatedDistance,
+          'index': i,
+        });
+
+        accumulatedDistance = 0;
+      }
+    }
+
+    if (intervalImages.isEmpty && points.isNotEmpty && images.isNotEmpty) {
+      intervalImages.add({
+        'position': points.first,
+        'imagePath': images.first,
+        'distance': 0,
+        'index': 0,
+      });
+
+      if (points.length > 1) {
+        intervalImages.add({
+          'position': points.last,
+          'imagePath': images.last,
+          'distance': totalDistance,
+          'index': points.length - 1,
+        });
+      }
+    }
+
+    return intervalImages;
+  }
+
+  Future<BitmapDescriptor> _createCustomMarkerIcon(String imagePath) async {
+    try {
+      Uint8List imageData;
+
+      if (_isFromAPI) {
+        imageData = await _loadNetworkImage(imagePath);
+      } else {
+        final File imageFile = File(imagePath);
+        if (!await imageFile.exists()) {
+          return BitmapDescriptor.defaultMarker;
+        }
+        imageData = await imageFile.readAsBytes();
+      }
+
+      final Codec codec = await instantiateImageCodec(
+        imageData,
+        targetWidth: 60,
+        targetHeight: 60,
+      );
+
+      final FrameInfo frame = await codec.getNextFrame();
+      final ByteData? byteData =
+          await frame.image.toByteData(format: ImageByteFormat.png);
+
+      if (byteData == null) {
+        return BitmapDescriptor.defaultMarker;
+      }
+
+      return BitmapDescriptor.fromBytes(byteData.buffer.asUint8List());
+    } catch (e) {
+      print('Error creating custom marker: $e');
+      return BitmapDescriptor.defaultMarker;
+    }
   }
 
   Widget _buildFullScreenImageViewer() {
@@ -1093,28 +1670,42 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
                 panEnabled: true,
                 minScale: 0.5,
                 maxScale: 4.0,
-                child: Image.network(
-                  _fullScreenImageUrl!,
-                  fit: BoxFit.contain,
-                  loadingBuilder: (context, child, loadingProgress) {
-                    if (loadingProgress == null) return child;
-                    return Center(
-                      child: CircularProgressIndicator(
-                        value: loadingProgress.expectedTotalBytes != null
-                            ? loadingProgress.cumulativeBytesLoaded /
-                                loadingProgress.expectedTotalBytes!
-                            : null,
+                child: _isFromAPI
+                    ? Image.network(
+                        _fullScreenImageUrl!,
+                        fit: BoxFit.contain,
+                        loadingBuilder: (context, child, loadingProgress) {
+                          if (loadingProgress == null) return child;
+                          return Center(
+                            child: CircularProgressIndicator(
+                              value: loadingProgress.expectedTotalBytes != null
+                                  ? loadingProgress.cumulativeBytesLoaded /
+                                      loadingProgress.expectedTotalBytes!
+                                  : null,
+                            ),
+                          );
+                        },
+                        errorBuilder: (context, error, stackTrace) =>
+                            const Center(
+                          child: Icon(
+                            Icons.error,
+                            color: Colors.red,
+                            size: 50,
+                          ),
+                        ),
+                      )
+                    : Image.file(
+                        File(_fullScreenImageUrl!),
+                        fit: BoxFit.contain,
+                        errorBuilder: (context, error, stackTrace) =>
+                            const Center(
+                          child: Icon(
+                            Icons.error,
+                            color: Colors.red,
+                            size: 50,
+                          ),
+                        ),
                       ),
-                    );
-                  },
-                  errorBuilder: (context, error, stackTrace) => const Center(
-                    child: Icon(
-                      Icons.error,
-                      color: Colors.red,
-                      size: 50,
-                    ),
-                  ),
-                ),
               ),
             ),
             Positioned(
@@ -1241,7 +1832,6 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
     final status = widget.scan['metadata']['status'] ?? 'pending';
     final isApiScan = _isFromAPI || widget.scan['isFromAPI'] == true;
 
-    // Offline mode
     if (!isOnline && status != 'uploaded') {
       return Container(
         height: 250,
@@ -1272,7 +1862,6 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       );
     }
 
-    // API scan with completed status
     final processedModelUrl = _apiScanDetail?.pointCloud?.processedModel;
     final hasProcessedModel =
         processedModelUrl != null && processedModelUrl.isNotEmpty;
@@ -1319,7 +1908,6 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       );
     }
 
-    // Local scan with uploaded status
     final snapshotPath = widget.scan['snapshotPath'];
     if (status == 'uploaded' &&
         snapshotPath != null &&
@@ -1352,7 +1940,6 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       );
     }
 
-    // Failed API or local scan
     if (status == 'failed') {
       return GestureDetector(
         onTap: _previewUSDZ,
@@ -1397,7 +1984,6 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
       );
     }
 
-    // Processing or pending states for API and local scans
     final double fileSizeMB;
     if (_apiScanDetail?.dataSizeMb != null) {
       fileSizeMB = _apiScanDetail!.dataSizeMb;
@@ -1652,13 +2238,11 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
             Column(
               children: [
                 Padding(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 16.0, vertical: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12),
                   child: Row(
                     children: [
                       IconButton(
-                        icon: const Icon(Icons.arrow_back_ios,
-                            color: Colors.white, size: 20),
+                        icon: const Icon(Icons.arrow_back_ios, color: Colors.white, size: 20),
                         onPressed: () {
                           Navigator.pop(context);
                         },
@@ -1672,32 +2256,69 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
                       ),
                       const Spacer(),
                       PopupMenuButton<String>(
-                        icon: const Icon(Icons.more_horiz,
-                            color: Colors.white, size: 24),
+                        icon: const Icon(Icons.more_horiz, color: Colors.white, size: 24),
                         onSelected: (value) {
                           if (value == 'delete') {
                             _showDeleteConfirmationDialog();
-                          } else if (value == 'download') {
+                          } else if (value == 'download_zip') {
                             _downloadZipFile();
+                          } else if (value == 'download_geotiff' && !_isProcessing) {
+                            _downloadGeoTiff();
                           }
                         },
                         itemBuilder: (context) => [
-                          const PopupMenuItem(
-                            value: 'download',
-                            child: Text('Download Zip',
-                                style: TextStyle(color: Colors.blue)),
+                          PopupMenuItem(
+                            value: 'download_geotiff',
+                            enabled: !_isProcessing,
+                            child: Row(
+                              children: [
+                                if (_isProcessing)
+                                  SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
+                                    ),
+                                  )
+                                else
+                                  const Icon(Icons.download, color: Colors.blue, size: 20),
+                                const SizedBox(width: 8),
+                                Text(
+                                  _isProcessing ? 'Downloading...' : 'Download GeoTIFF',
+                                  style: TextStyle(
+                                    color: _isProcessing ? Colors.grey : Colors.blue,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
+
+                          const PopupMenuItem(
+                            value: 'download_zip',
+                            child: Row(
+                              children: [
+                                Icon(Icons.archive, color: Colors.blue, size: 20),
+                                SizedBox(width: 8),
+                                Text('Download Zip', style: TextStyle(color: Colors.blue)),
+                              ],
+                            ),
+                          ),
+                          const PopupMenuDivider(),
                           const PopupMenuItem(
                             value: 'delete',
-                            child: Text('Delete',
-                                style: TextStyle(color: Colors.red)),
+                            child: Row(
+                              children: [
+                                Icon(Icons.delete, color: Colors.red, size: 20),
+                                SizedBox(width: 8),
+                                Text('Delete', style: TextStyle(color: Colors.red)),
+                              ],
+                            ),
                           ),
                         ],
-                      ),
-                      const SizedBox(width: 12),
+                      ),                      const SizedBox(width: 12),
                       IconButton(
-                        icon: const Icon(Icons.close,
-                            color: Colors.white, size: 20),
+                        icon: const Icon(Icons.close, color: Colors.white, size: 20),
                         onPressed: () => Navigator.pop(context),
                       ),
                     ],
@@ -1811,7 +2432,15 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
             ),
             if (_isFullScreenMap)
               GestureDetector(
-                onTap: () => setState(() => _isFullScreenMap = false),
+                onTap: () {
+                  if (mounted) {
+                    setState(() {
+                      _isFullScreenMap = false;
+                    });
+                    // Reload markers for non-fullscreen mode
+                    _loadMapMarkers();
+                  }
+                },
                 child: Container(
                   color: Colors.grey[900],
                   child: SafeArea(
@@ -1826,7 +2455,11 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
                                 color: Colors.white, size: 30),
                             onPressed: () {
                               if (mounted) {
-                                setState(() => _isFullScreenMap = false);
+                                setState(() {
+                                  _isFullScreenMap = false;
+                                });
+                                // Reload markers for non-fullscreen mode
+                                _loadMapMarkers();
                               }
                             },
                           ),
@@ -1836,7 +2469,6 @@ class _ModelDetailScreenState extends ConsumerState<ModelDetailScreen>
                   ),
                 ),
               ),
-            // Add the full-screen image viewer here
             if (_isFullScreenImage) _buildFullScreenImageViewer(),
           ],
         ),

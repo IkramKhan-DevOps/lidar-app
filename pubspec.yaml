@@ -54,6 +54,7 @@ dependencies:
   connectivity_plus: ^6.1.5
   model_viewer_plus: ^1.7.2
   flutter_3d_viewer: ^1.0.0
+  dio: ^5.4.0
   path_provider: ^2.1.1
 
 
